@@ -1,0 +1,108 @@
+{
+  "projectType": "general",
+  "projectName": "Developer Knowledge Base",
+  "projectDescription": "Comprehensive reference guides for C#, .NET, Azure, system design, and software architecture",
+  "theme": "sequoia",
+  "primaryColor": "#6b21a8",
+  "lightColor": "#a855f7",
+  "darkColor": "#581c87",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Programming",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction"]
+          },
+          {
+            "group": "C# Fundamentals",
+            "pages": [
+              "csharp/overview",
+              "csharp/syntax-basics",
+              "csharp/data-types",
+              "csharp/control-flow",
+              "csharp/methods-functions"
+            ]
+          },
+          {
+            "group": "Advanced C#",
+            "pages": [
+              "advanced-csharp/oop-principles",
+              "advanced-csharp/memory-management",
+              "advanced-csharp/generics",
+              "advanced-csharp/delegates-events",
+              "advanced-csharp/reflection-attributes",
+              "advanced-csharp/async-programming"
+            ]
+          },
+          {
+            "group": ".NET Framework",
+            "pages": [
+              "dotnet/clr-runtime",
+              "dotnet/linq",
+              "dotnet/collections",
+              "dotnet/web-development",
+              "dotnet/desktop-apps",
+              "dotnet/deployment"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Cloud & Architecture",
+        "groups": [
+          {
+            "group": "Azure Certification",
+            "pages": [
+              "azure/az-204-overview",
+              "azure/compute-services",
+              "azure/storage-solutions",
+              "azure/security-identity",
+              "azure/cloud-integration",
+              "azure/monitoring-logging"
+            ]
+          },
+          {
+            "group": "System Design",
+            "pages": [
+              "system-design/fundamentals",
+              "system-design/scalability",
+              "system-design/databases",
+              "system-design/caching",
+              "system-design/load-balancing",
+              "system-design/availability-patterns"
+            ]
+          },
+          {
+            "group": "Software Architecture",
+            "pages": [
+              "architecture/principles",
+              "architecture/design-patterns",
+              "architecture/architectural-styles",
+              "architecture/api-design",
+              "architecture/security-practices",
+              "architecture/enterprise-integration"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Comprehensive C# language reference from basics to advanced concepts",
+    ".NET Framework libraries and ecosystem guide",
+    "AZ-204 Azure Developer certification preparation materials",
+    "System design principles and distributed systems patterns",
+    "Software architecture best practices and design patterns",
+    "Real-world examples and code snippets"
+  ],
+  "publicApiSurface": [
+    "C# Language Features: OOP, Generics, LINQ, Async/Await, Reflection",
+    ".NET Framework: CLR, Collections, Web APIs, Desktop Development",
+    "Azure Services: App Service, Functions, Storage, Cosmos DB, Key Vault",
+    "System Design: CAP Theorem, Consistency Patterns, Load Balancing, Caching",
+    "Architecture Patterns: Microservices, Event-Driven, CQRS, Domain-Driven Design",
+    "Design Patterns: Singleton, Factory, Observer, Strategy, Repository"
+  ]
+}
