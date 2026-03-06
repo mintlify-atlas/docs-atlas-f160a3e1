@@ -1,0 +1,527 @@
+---
+title: API Design
+description: Best practices for designing scalable, maintainable APIs using REST, GraphQL, gRPC, and messaging patterns
+---
+
+## REST API Design
+
+REST uses resource-oriented URLs and HTTP verbs for stateless APIs. It's the standard for public APIs and service-to-service communication.
+
+### REST Principles
+
+<CardGroup cols={2}>
+  <Card title="Resources" icon="cube">
+    Use nouns, not verbs: `/orders` not `/getOrders`
+  </Card>
+  <Card title="HTTP Verbs" icon="arrows-rotate">
+    GET (read), POST (create), PUT (replace), PATCH (update), DELETE (remove)
+  </Card>
+  <Card title="Stateless" icon="server">
+    Each request contains all information needed to process it
+  </Card>
+  <Card title="Status Codes" icon="signal">
+    2xx (success), 3xx (redirect), 4xx (client error), 5xx (server error)
+  </Card>
+</CardGroup>
+
+### RESTful URL Design
+
+```http
+GET    /api/v1/orders              # List orders
+GET    /api/v1/orders/123          # Get specific order
+POST   /api/v1/orders              # Create new order
+PUT    /api/v1/orders/123          # Replace order (full update)
+PATCH  /api/v1/orders/123          # Partial update
+DELETE /api/v1/orders/123          # Delete order
+
+# Nested resources
+GET    /api/v1/orders/123/items    # Get order items
+POST   /api/v1/orders/123/items    # Add item to order
+```
+
+### HTTP Status Codes
+
+<Tabs>
+  <Tab title="2xx Success">
+    - **200 OK**: Request succeeded
+    - **201 Created**: Resource created (return Location header)
+    - **204 No Content**: Success with no response body
+  </Tab>
+  
+  <Tab title="3xx Redirection">
+    - **301 Moved Permanently**: Resource permanently moved
+    - **302 Found**: Temporary redirect
+    - **304 Not Modified**: Cached version is still valid
+  </Tab>
+  
+  <Tab title="4xx Client Error">
+    - **400 Bad Request**: Invalid request format
+    - **401 Unauthorized**: Authentication required
+    - **403 Forbidden**: Not authorized to access resource
+    - **404 Not Found**: Resource doesn't exist
+    - **409 Conflict**: Resource conflict (duplicate, version mismatch)
+    - **422 Unprocessable Entity**: Validation failed
+    - **429 Too Many Requests**: Rate limit exceeded
+  </Tab>
+  
+  <Tab title="5xx Server Error">
+    - **500 Internal Server Error**: Unexpected server error
+    - **502 Bad Gateway**: Invalid response from upstream server
+    - **503 Service Unavailable**: Temporary unavailability
+    - **504 Gateway Timeout**: Upstream timeout
+  </Tab>
+</Tabs>
+
+### Pagination
+
+Cursor-based pagination scales better than offset for large datasets.
+
+```json
+// Cursor-based pagination (recommended)
+GET /api/v1/orders?limit=20&cursor=eyJpZCI6MTIzfQ
+
+{
+  "data": [...],
+  "pagination": {
+    "next_cursor": "eyJpZCI6MTQzfQ",
+    "has_more": true
+  }
+}
+
+// Offset-based pagination (simple but doesn't scale)
+GET /api/v1/orders?limit=20&offset=40
+```
+
+<Warning>
+Ignore pagination for collection endpoints leads to memory + latency issues. Always paginate collections.
+</Warning>
+
+### API Versioning
+
+<Tabs>
+  <Tab title="URL Path (Recommended)">
+    ```http
+    /api/v1/orders
+    /api/v2/orders
+    ```
+    Clear, cacheable, easy to route
+  </Tab>
+  
+  <Tab title="Header">
+    ```http
+    Accept: application/vnd.myapi.v2+json
+    ```
+    Keeps URLs clean but harder to test
+  </Tab>
+  
+  <Tab title="Query Parameter">
+    ```http
+    /api/orders?version=2
+    ```
+    Simple but breaks caching
+  </Tab>
+</Tabs>
+
+<Tip>
+Version REST APIs from day one. Use URL path versioning for simplicity and cache-ability.
+</Tip>
+
+### OpenAPI Specification
+
+Generate machine-readable API contracts using OpenAPI (formerly Swagger).
+
+```yaml
+openapi: 3.0.0
+info:
+  title: Order API
+  version: 1.0.0
+  
+paths:
+  /orders:
+    get:
+      summary: List orders
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+```
+
+<Note>
+Generate OpenAPI specs from code and validate them in CI to keep documentation in sync with implementation.
+</Note>
+
+## GraphQL API Design
+
+GraphQL provides a query language that allows clients to request exactly the data they need, solving the over-fetching and under-fetching problems of REST.
+
+### GraphQL Schema
+
+```graphql
+# Type definitions
+type Order {
+  id: ID!
+  total: Float!
+  status: OrderStatus!
+  customer: Customer!
+  items: [OrderItem!]!
+  createdAt: DateTime!
+}
+
+type Customer {
+  id: ID!
+  name: String!
+  email: String!
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+type Query {
+  order(id: ID!): Order
+  orders(limit: Int, cursor: String): OrderConnection!
+}
+
+type Mutation {
+  placeOrder(input: PlaceOrderInput!): PlaceOrderPayload!
+  cancelOrder(id: ID!): Order!
+}
+```
+
+### GraphQL Queries
+
+```graphql
+# Client fetches only what it needs
+query GetOrder($id: ID!) {
+  order(id: $id) {
+    total
+    status
+    customer {
+      name
+      email
+    }
+    items {
+      product {
+        name
+      }
+      quantity
+      price
+    }
+  }
+}
+```
+
+### Solving the N+1 Problem
+
+Use DataLoader for batched resolver execution to avoid N+1 database queries.
+
+```typescript
+import DataLoader from 'dataloader';
+
+// Batch load customers by ID
+const customerLoader = new DataLoader(async (ids: string[]) => {
+  const customers = await db.customers.findMany({
+    where: { id: { in: ids } }
+  });
+  // Return in same order as requested IDs
+  return ids.map(id => customers.find(c => c.id === id));
+});
+
+// Resolver uses DataLoader
+const resolvers = {
+  Order: {
+    customer: (order) => customerLoader.load(order.customerId)
+  }
+};
+```
+
+<Warning>
+GraphQL N+1 problem: use DataLoader for batched resolver execution to avoid one database query per item.
+</Warning>
+
+### GraphQL Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check">
+    - Use DataLoader for all resolvers accessing a database
+    - Implement query depth limiting to prevent abuse
+    - Use persisted queries for production clients
+    - Add input validation at the resolver level
+  </Card>
+  <Card title="Don't" icon="xmark">
+    - Expose your internal domain model directly in the schema
+    - Use GraphQL mutations for fire-and-forget async operations
+    - Allow unlimited query depth or complexity
+  </Card>
+</CardGroup>
+
+<Tip>
+Use GraphQL for internal BFF (Backend for Frontend) layers serving mobile/SPA clients with complex data needs; use REST for stable public APIs with broad consumer compatibility.
+</Tip>
+
+## gRPC API Design
+
+gRPC is a high-performance RPC framework using Protocol Buffers for binary serialization and HTTP/2 for multiplexed transport. It's the standard for internal microservice communication.
+
+### Protocol Buffers
+
+```protobuf
+syntax = "proto3";
+
+package orders.v1;
+
+service OrderService {
+    // Unary RPC
+    rpc GetOrder(GetOrderRequest) returns (Order);
+    
+    // Server streaming
+    rpc ListOrders(ListOrdersRequest) returns (stream Order);
+    
+    // Client streaming
+    rpc PlaceOrders(stream PlaceOrderRequest) returns (PlaceOrdersResponse);
+    
+    // Bidirectional streaming
+    rpc ProcessOrders(stream OrderUpdate) returns (stream OrderResult);
+}
+
+message GetOrderRequest {
+    string order_id = 1;
+}
+
+message Order {
+    string id = 1;
+    double total = 2;
+    OrderStatus status = 3;
+    string customer_id = 4;
+    repeated OrderItem items = 5;
+    google.protobuf.Timestamp created_at = 6;
+}
+
+enum OrderStatus {
+    ORDER_STATUS_UNSPECIFIED = 0;
+    ORDER_STATUS_PENDING = 1;
+    ORDER_STATUS_CONFIRMED = 2;
+    ORDER_STATUS_SHIPPED = 3;
+}
+
+message OrderItem {
+    string product_id = 1;
+    int32 quantity = 2;
+    double price = 3;
+}
+```
+
+### gRPC Features
+
+<CardGroup cols={2}>
+  <Card title="Binary Protocol" icon="binary">
+    Protocol Buffers: 5x smaller than JSON, schema-enforced
+  </Card>
+  <Card title="HTTP/2 Multiplexing" icon="diagram-project">
+    Multiple streams on a single connection
+  </Card>
+  <Card title="4 RPC Types" icon="arrows-split-up-and-left">
+    Unary, server-streaming, client-streaming, bidirectional
+  </Card>
+  <Card title="Code Generation" icon="code">
+    Strongly typed client/server stubs in any language
+  </Card>
+</CardGroup>
+
+### Protobuf Evolution Rules
+
+<Warning>
+Protobuf field numbers must never change — add new fields, deprecate old ones. Changing field numbers breaks all consumers.
+</Warning>
+
+```protobuf
+message Order {
+    string id = 1;                    // Never change field number
+    double total = 2;
+    OrderStatus status = 3;
+    string customer_id = 4;
+    
+    // Add new fields with new numbers
+    string tracking_number = 5;       // Safe: new optional field
+    
+    // Deprecate fields, don't remove
+    reserved 6;                        // Previously used field
+    reserved "old_field_name";
+}
+```
+
+<Tip>
+Enable gRPC server reflection in non-production environments — it dramatically speeds up development and debugging without distributing .proto files to every team.
+</Tip>
+
+### gRPC Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check">
+    - Use gRPC for high-frequency internal service-to-service calls
+    - Enforce backward-compatible Protobuf evolution (only add fields, never remove)
+    - Use buf.build for Protobuf linting and breaking change detection
+    - Implement proper error handling with status codes
+  </Card>
+  <Card title="Don't" icon="xmark">
+    - Expose gRPC directly to browsers without a gRPC-Web proxy
+    - Change field numbers in Protobuf definitions
+    - Use gRPC for external public APIs — REST/GraphQL has wider client support
+  </Card>
+</CardGroup>
+
+## Messaging & Event-Driven APIs
+
+Message queues (RabbitMQ, SQS) and event streams (Kafka) decouple producers from consumers, enabling async, fault-tolerant, horizontally scalable communication.
+
+### Queue vs Topic
+
+<Tabs>
+  <Tab title="Queue (Point-to-Point)">
+    Each message delivered to **one consumer**
+    
+    ```yaml
+    Producer → Queue → Consumer 1
+                    → Consumer 2 (competing)
+                    → Consumer 3 (competing)
+    
+    # Use cases:
+    - Task distribution
+    - Work queues
+    - Job processing
+    ```
+  </Tab>
+  
+  <Tab title="Topic (Pub-Sub)">
+    Each message delivered to **all subscribers**
+    
+    ```yaml
+    Producer → Topic → Subscriber 1
+                    → Subscriber 2
+                    → Subscriber 3
+    
+    # Use cases:
+    - Event broadcasting
+    - Notifications
+    - Change data capture
+    ```
+  </Tab>
+</Tabs>
+
+### Kafka Event Streaming
+
+Kafka is a distributed log, durable, replayable, with consumer groups for parallel processing.
+
+```typescript
+// Kafka producer
+const producer = kafka.producer();
+await producer.connect();
+
+await producer.send({
+  topic: 'orders',
+  messages: [
+    {
+      key: order.customerId,  // Partition key
+      value: JSON.stringify({
+        type: 'OrderPlaced',
+        orderId: order.id,
+        total: order.total,
+        timestamp: Date.now()
+      })
+    }
+  ]
+});
+
+// Kafka consumer with offset commit
+const consumer = kafka.consumer({ groupId: 'order-processor' });
+await consumer.subscribe({ topic: 'orders' });
+
+await consumer.run({
+  eachMessage: async ({ topic, partition, message }) => {
+    await processIdempotently(message);
+    // Offset auto-committed after eachMessage resolves
+  }
+});
+```
+
+### Idempotent Consumers
+
+<Note>
+Consumer idempotency is mandatory — at-least-once delivery guarantees duplicates will arrive.
+</Note>
+
+```typescript
+// Idempotent message processing
+async function processIdempotently(message: Message) {
+  const messageId = message.headers['message-id'];
+  
+  // Check if already processed
+  if (await db.processedMessages.exists(messageId)) {
+    console.log(`Skipping duplicate message ${messageId}`);
+    return;
+  }
+  
+  // Process in transaction
+  await db.transaction(async (tx) => {
+    await processOrder(message.value, tx);
+    await tx.processedMessages.insert({ id: messageId });
+  });
+}
+```
+
+### Dead Letter Queue (DLQ)
+
+<Warning>
+Always configure a Dead Letter Queue for every consumer — production message queues will eventually receive messages that fail repeatedly.
+</Warning>
+
+```typescript
+// RabbitMQ with DLQ
+const queue = 'orders';
+const dlq = 'orders.dlq';
+
+await channel.assertQueue(dlq, { durable: true });
+await channel.assertQueue(queue, {
+  durable: true,
+  arguments: {
+    'x-dead-letter-exchange': '',
+    'x-dead-letter-routing-key': dlq,
+    'x-message-ttl': 86400000,  // 24 hours
+  }
+});
+```
+
+### Messaging Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check">
+    - Make all message consumers idempotent
+    - Configure DLQs and monitor them for failures
+    - Use Kafka consumer groups for parallel processing with ordering guarantees
+    - Include correlation IDs for distributed tracing
+  </Card>
+  <Card title="Don't" icon="xmark">
+    - Process messages without idempotency (at-least-once means duplicates)
+    - Block the consumer thread during slow downstream calls
+    - Ignore DLQ depth as an operational metric
+  </Card>
+</CardGroup>
+
+<Tip>
+Kafka enables event sourcing, audit logs, and real-time data pipelines at massive scale. Use consumer groups for parallel processing with ordering guarantees per partition.
+</Tip>

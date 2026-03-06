@@ -1,0 +1,554 @@
+---
+title: C# Data Types
+description: Comprehensive guide to C# type system including value types, reference types, and type conversions
+---
+
+# C# Data Types
+
+C# is a strongly-typed language with a rich type system. Understanding types is essential for writing efficient, bug-free code.
+
+## Type Categories
+
+C# types fall into two fundamental categories:
+
+<CardGroup cols={2}>
+  <Card title="Value Types">
+    Store data directly. Allocated on the stack (usually). Include primitives, structs, and enums.
+  </Card>
+  
+  <Card title="Reference Types">
+    Store a reference to data on the heap. Include classes, interfaces, delegates, and strings.
+  </Card>
+</CardGroup>
+
+## Value Types
+
+Value types store their data directly in the variable.
+
+### Numeric Types
+
+#### Integer Types
+
+```csharp
+// Signed integers
+sbyte  tinyNumber = -128;           // 8-bit:  -128 to 127
+short  smallNumber = -32768;        // 16-bit: -32,768 to 32,767
+int    regularNumber = -2147483648; // 32-bit: -2.1B to 2.1B
+long   bigNumber = -9223372036854775808L; // 64-bit
+
+// Unsigned integers
+byte   unsignedTiny = 255;          // 8-bit:  0 to 255
+ushort unsignedSmall = 65535;       // 16-bit: 0 to 65,535
+uint   unsignedRegular = 4294967295U; // 32-bit: 0 to 4.3B
+ulong  unsignedBig = 18446744073709551615UL; // 64-bit
+```
+
+<Tip>
+Use `int` as the default integer type unless you have specific memory or range requirements. Modern CPUs optimize for 32-bit integer operations.
+</Tip>
+
+#### Floating-Point Types
+
+```csharp
+// Single precision (32-bit)
+float temperature = 98.6f;   // ~7 digits precision
+float pi = 3.14159f;         // Suffix 'f' required
+
+// Double precision (64-bit) - default for literals
+double distance = 384400.0;  // ~15-16 digits precision
+double exact = 3.14159265359;
+
+// Decimal (128-bit) - for financial calculations
+decimal price = 99.99m;      // 28-29 digits precision
+decimal tax = 0.0825m;       // Suffix 'm' required
+```
+
+<Warning>
+**Never use `float` or `double` for financial calculations!** Floating-point arithmetic has rounding errors. Always use `decimal` for money.
+
+```csharp
+// Wrong - rounding errors
+double total = 0.1 + 0.2;  // 0.30000000000000004
+
+// Correct - exact decimal arithmetic
+decimal total = 0.1m + 0.2m;  // 0.3
+```
+</Warning>
+
+### Boolean Type
+
+```csharp
+bool isActive = true;
+bool isDeleted = false;
+
+// Boolean operators
+bool result = isActive && !isDeleted;
+bool hasAccess = isAdmin || isModerator;
+```
+
+### Character Type
+
+```csharp
+char letter = 'A';              // Single character (16-bit Unicode)
+char digit = '5';
+char newline = '\n';            // Escape sequence
+char unicode = '\u0041';        // Unicode: 'A'
+
+// Character classification
+bool isDigit = char.IsDigit(digit);      // true
+bool isLetter = char.IsLetter(letter);   // true
+bool isUpper = char.IsUpper(letter);     // true
+```
+
+### Struct Types
+
+Structs are value types that can contain multiple fields:
+
+```csharp
+public struct Point
+{
+    public int X;
+    public int Y;
+
+    public Point(int x, int y)
+    {
+        X = x;
+        Y = y;
+    }
+    
+    public double DistanceFromOrigin()
+        => Math.Sqrt(X * X + Y * Y);
+}
+
+// Usage
+Point p = new Point(3, 4);
+Console.WriteLine(p.DistanceFromOrigin());  // 5.0
+
+// Structs are copied by value
+Point p2 = p;  // Creates a copy
+p2.X = 10;     // Does not affect p
+```
+
+<Note>
+Use structs for small, immutable data structures. Large structs have copy overhead - prefer classes for large data structures.
+</Note>
+
+### Enum Types
+
+Enums define named constants:
+
+```csharp
+public enum OrderStatus
+{
+    Pending = 0,
+    Processing = 1,
+    Shipped = 2,
+    Delivered = 3,
+    Cancelled = 4
+}
+
+// Usage
+OrderStatus status = OrderStatus.Processing;
+
+if (status == OrderStatus.Shipped)
+{
+    Console.WriteLine("Order is on the way!");
+}
+
+// Enum to string
+string statusText = status.ToString();  // "Processing"
+
+// Parse string to enum
+OrderStatus parsed = Enum.Parse<OrderStatus>("Shipped");
+```
+
+#### Flags Enum
+
+For bit flags, use `[Flags]` attribute:
+
+```csharp
+[Flags]
+public enum FileAccess
+{
+    None = 0,
+    Read = 1,
+    Write = 2,
+    Execute = 4,
+    Delete = 8
+}
+
+// Combining flags
+FileAccess access = FileAccess.Read | FileAccess.Write;
+
+// Checking flags
+if (access.HasFlag(FileAccess.Read))
+{
+    Console.WriteLine("Read access granted");
+}
+
+// Testing multiple flags
+if ((access & FileAccess.Write) != 0)
+{
+    Console.WriteLine("Write access granted");
+}
+```
+
+## Reference Types
+
+Reference types store a reference to the actual data on the heap.
+
+### String Type
+
+Strings are immutable reference types:
+
+```csharp
+string name = "Alice";
+string empty = string.Empty;  // Preferred over ""
+string? nullable = null;
+
+// String operations
+string upper = name.ToUpper();        // "ALICE"
+string sub = name.Substring(0, 3);    // "Ali"
+bool contains = name.Contains("ice"); // true
+string[] parts = "a,b,c".Split(',');  // ["a", "b", "c"]
+
+// String immutability
+string original = "Hello";
+string modified = original.ToUpper();  // Creates new string
+Console.WriteLine(original);  // Still "Hello" - unchanged
+```
+
+#### String Performance
+
+```csharp
+// Inefficient - creates many intermediate strings
+string result = "";
+for (int i = 0; i < 1000; i++)
+{
+    result += i.ToString();  // DON'T DO THIS
+}
+
+// Efficient - uses mutable buffer
+var builder = new StringBuilder();
+for (int i = 0; i < 1000; i++)
+{
+    builder.Append(i);
+}
+string result = builder.ToString();
+```
+
+<Tip>
+**String Memory Optimization**: Use `Span<char>` and `ReadOnlySpan<char>` for zero-allocation string processing:
+
+```csharp
+string text = "Hello,World";
+ReadOnlySpan<char> span = text.AsSpan();
+int comma = span.IndexOf(',');
+ReadOnlySpan<char> before = span[..comma];     // "Hello" - no allocation
+ReadOnlySpan<char> after = span[(comma + 1)..]; // "World" - no allocation
+```
+</Tip>
+
+### Array Types
+
+Arrays are fixed-size collections:
+
+```csharp
+// Array declaration and initialization
+int[] numbers = new int[5];           // [0, 0, 0, 0, 0]
+string[] names = { "Alice", "Bob" };  // Array initializer
+
+// Multi-dimensional arrays
+int[,] matrix = new int[3, 3];        // 2D array
+matrix[0, 0] = 1;
+
+// Jagged arrays (array of arrays)
+int[][] jagged = new int[3][];
+jagged[0] = new int[] { 1, 2 };
+jagged[1] = new int[] { 3, 4, 5 };
+
+// Array operations
+int length = numbers.Length;
+Array.Sort(numbers);
+Array.Reverse(numbers);
+int index = Array.IndexOf(numbers, 42);
+```
+
+### Class Types
+
+Classes are custom reference types:
+
+```csharp
+public class Customer
+{
+    // Fields
+    private string _name;
+    
+    // Properties
+    public string Name 
+    { 
+        get => _name; 
+        set => _name = value ?? throw new ArgumentNullException(nameof(value));
+    }
+    
+    public int Age { get; set; }
+    
+    // Auto-property with initializer
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    
+    // Constructor
+    public Customer(string name, int age)
+    {
+        Name = name;
+        Age = age;
+    }
+    
+    // Method
+    public string GetGreeting() => $"Hello, {Name}!";
+}
+
+// Usage
+var customer = new Customer("Alice", 30);
+Console.WriteLine(customer.GetGreeting());
+```
+
+## Stack vs Heap Memory
+
+Understanding memory allocation is crucial for performance:
+
+```csharp
+public void Example()
+{
+    // Stack allocation
+    int x = 42;              // Value type - on stack
+    Point p = new Point(3, 4); // Struct - on stack
+    
+    // Heap allocation
+    var customer = new Customer("Alice", 30);  // Class - on heap
+    var numbers = new int[100];                // Array - on heap
+    
+    // Boxing: value type → heap
+    object boxed = x;  // Heap allocation - avoid in hot paths!
+    
+    // Stack allocation with stackalloc
+    Span<int> buffer = stackalloc int[128];  // Stack - very fast
+    buffer[0] = 42;
+}
+```
+
+<Warning>
+**Boxing and Unboxing**: Implicit conversion of value types to `object` causes boxing (heap allocation). Avoid boxing in performance-critical code:
+
+```csharp
+// Boxing - bad
+object boxed = 42;        // Heap allocation
+int unboxed = (int)boxed; // Cast required
+
+// Generic collections avoid boxing
+List<int> numbers = new();  // No boxing
+numbers.Add(42);            // Efficient
+
+// Non-generic causes boxing
+ArrayList list = new();     // Avoid this
+list.Add(42);               // Boxing occurs!
+```
+</Warning>
+
+## Nullable Types
+
+### Nullable Value Types
+
+Value types can be made nullable with `?`:
+
+```csharp
+int? nullableInt = null;
+double? nullableDouble = 3.14;
+
+// Checking for value
+if (nullableInt.HasValue)
+{
+    int value = nullableInt.Value;
+}
+
+// Null-coalescing
+int result = nullableInt ?? 0;  // Use 0 if null
+
+// Null-conditional
+int? doubled = nullableInt?.ToString().Length;
+```
+
+### Nullable Reference Types (C# 8.0+)
+
+Enable with `<Nullable>enable</Nullable>` in project file:
+
+```csharp
+// Non-nullable reference type
+string name = "Alice";     // Cannot be null
+string name = null;        // Compiler warning
+
+// Nullable reference type
+string? nullableName = null;  // Can be null
+
+if (nullableName != null)
+{
+    Console.WriteLine(nullableName.ToUpper());  // Safe
+}
+
+// Null-forgiving operator (use carefully)
+string name = nullableName!;  // Tells compiler: trust me, not null
+```
+
+## Type Conversions
+
+### Implicit Conversion
+
+Automatic conversion when no data loss:
+
+```csharp
+int intValue = 42;
+long longValue = intValue;      // Implicit: int → long
+double doubleValue = intValue;  // Implicit: int → double
+```
+
+### Explicit Conversion (Casting)
+
+Required when potential data loss:
+
+```csharp
+double d = 123.45;
+int i = (int)d;  // Explicit cast: 123 (truncates decimal)
+
+long big = 1000000000000L;
+int small = (int)big;  // May overflow if too large
+```
+
+### Safe Casting
+
+```csharp
+object obj = "Hello";
+
+// Type testing with 'is'
+if (obj is string)
+{
+    string s = (string)obj;
+}
+
+// Pattern matching (C# 7.0+)
+if (obj is string s)
+{
+    Console.WriteLine(s.ToUpper());
+}
+
+// Safe cast with 'as'
+string? text = obj as string;  // null if not string
+if (text != null)
+{
+    Console.WriteLine(text);
+}
+```
+
+### Parse and TryParse
+
+Converting strings to value types:
+
+```csharp
+// Parse - throws exception on failure
+int number = int.Parse("123");
+decimal price = decimal.Parse("99.99");
+
+// TryParse - returns bool (safer)
+if (int.TryParse("123", out int result))
+{
+    Console.WriteLine($"Parsed: {result}");
+}
+else
+{
+    Console.WriteLine("Invalid number");
+}
+
+// Parse with culture
+CultureInfo culture = CultureInfo.GetCultureInfo("en-US");
+decimal price = decimal.Parse("1,234.56", culture);
+```
+
+## Default Values
+
+Every type has a default value:
+
+```csharp
+int defaultInt = default(int);          // 0
+bool defaultBool = default(bool);       // false
+string defaultString = default(string); // null
+Point defaultPoint = default(Point);    // All fields 0
+
+// Generic default
+public T GetDefault<T>() => default(T);
+```
+
+## Type Inspection
+
+```csharp
+object obj = "Hello";
+
+// Get type at runtime
+Type type = obj.GetType();  // System.String
+string typeName = type.Name;
+string fullName = type.FullName;
+
+// typeof operator (compile-time)
+Type stringType = typeof(string);
+
+// Check type compatibility
+bool isString = obj is string;           // true
+bool assignable = typeof(object).IsAssignableFrom(typeof(string)); // true
+```
+
+## Best Practices
+
+<Accordion title="Choose the right numeric type">
+- Use `int` for general integers
+- Use `long` for large values or timestamps
+- Use `decimal` for financial calculations
+- Use `double` for scientific calculations
+- Avoid `float` unless interop requires it
+</Accordion>
+
+<Accordion title="Prefer value types for small, immutable data">
+```csharp
+// Good - small immutable struct
+public readonly struct Point
+{
+    public int X { get; init; }
+    public int Y { get; init; }
+}
+
+// Bad - large mutable struct has copy overhead
+public struct HugeData  // Use class instead
+{
+    public byte[] Buffer;  // Large array
+}
+```
+</Accordion>
+
+<Accordion title="Enable nullable reference types">
+Add to your `.csproj` file:
+```xml
+<PropertyGroup>
+    <Nullable>enable</Nullable>
+</PropertyGroup>
+```
+
+This provides compile-time null safety warnings.
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Control Flow" href="/csharp/control-flow">
+    Learn about conditionals and loops
+  </Card>
+  
+  <Card title="Methods & Functions" href="/csharp/methods-functions">
+    Master method creation and usage
+  </Card>
+</CardGroup>

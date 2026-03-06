@@ -1,0 +1,276 @@
+---
+title: Collections & Data Types
+description: .NET collections, value types, reference types, generics, and type system fundamentals
+---
+
+The .NET Framework provides a rich set of collection types and a powerful type system. Understanding the distinction between value types and reference types is fundamental to writing efficient .NET code.
+
+## Value Types
+
+Value types (struct, enum, primitives) are copied on assignment and typically stored on the stack. They provide predictable performance and value semantics.
+
+```csharp
+readonly struct Point
+{
+    public double X { get; }
+    public double Y { get; }
+    public Point(double x, double y) => (X, Y) = (x, y);
+}
+```
+
+### Value Type Characteristics
+
+- Value types derive from `System.ValueType`
+- Assignment creates a full copy, preventing aliasing bugs
+- **readonly struct** - Prevents all mutation after construction
+- **record struct** (C# 10) - Provides value equality and non-destructive mutation
+- **in parameters** - Pass structs by reference without copying
+- Enums are backed by `int` by default; specify underlying type explicitly
+
+<Warning>
+Avoid large mutable structs — copying overhead negates stack benefits.
+</Warning>
+
+### Advanced Struct Features
+
+- `Span<T>` is a ref struct, stack-only, enabling zero-copy slicing
+- Default struct is mutable — use `readonly struct` for immutability
+- Record structs provide value equality, ToString, and Deconstruct
+- Avoid large mutable structs (>16 bytes) — may be costlier to copy than reference types
+
+<Tip>
+Mark structs readonly whenever possible — the compiler generates more efficient code and eliminates hidden defensive copies.
+</Tip>
+
+## Reference Types
+
+Classes, interfaces, delegates, and strings are reference types. Variables hold references to heap-allocated objects, enabling shared state and polymorphism.
+
+```csharp
+record Person(string Name, int Age);
+var alice  = new Person("Alice", 30);
+var older  = alice with { Age = 31 }; // new instance
+Console.WriteLine(alice == older); // false
+```
+
+### Reference Type Features
+
+- `null` is the default value for reference type variables
+- **Nullable reference types** - `#nullable enable` adds compile-time null analysis
+- **Record classes** - Provide non-destructive mutation via `with` expressions
+- String is immutable; use `StringBuilder` for high-frequency concatenation
+- `WeakReference<T>` prevents GC rooting of cached objects
+
+<Note>
+Prefer record over class for DTOs and domain value objects — you get structural equality, ToString, and with-expressions for free.
+</Note>
+
+## Generics
+
+Generics enable type-safe, reusable algorithms and data structures without boxing overhead.
+
+```csharp
+public static T Max<T>(T a, T b)
+    where T : IComparable<T>
+    => a.CompareTo(b) >= 0 ? a : b;
+// Usage: Max(3, 7) → 7
+```
+
+### Generic Constraints
+
+<Tabs>
+  <Tab title="Common Constraints">
+    - `where T : new()` - Requires parameterless constructor
+    - `where T : struct` - Constrains to value types
+    - `where T : class?` - Constrains to nullable reference types
+    - `where T : IComparable<T>` - Interface constraint
+  </Tab>
+  <Tab title="Variance">
+    - **Covariance** (`out T`) - Return types in interfaces
+    - **Contravariance** (`in T`) - Parameter types in interfaces
+    - Both apply to interfaces and delegates
+  </Tab>
+</Tabs>
+
+### Generic Best Practices
+
+- Generic types and methods are compiled with type parameters resolved at JIT time
+- Specialized code per value type; shared code per reference type
+- `List<T>` outperforms `ArrayList` because no boxing for value types
+- Generic methods prefer type inference — explicit type args add clutter
+
+<Tip>
+Use IReadOnlyList&lt;T&gt; for return types and IEnumerable&lt;T&gt; for parameters — maximizes flexibility and enables covariant usage.
+</Tip>
+
+## Nullable Types
+
+`Nullable<T>` (T?) wraps value types to represent an absent value. Nullable reference type annotations add compile-time null-safety for reference types.
+
+```csharp
+int? x = null;
+int  y = x ?? 0;               // 0
+string? s = null;
+int  len = s?.Length ?? 0;     // 0
+s ??= "default";               // assigns if null
+```
+
+### Nullable Operators
+
+- **?.** - Null-conditional operator, short-circuits to null
+- **??** - Null-coalescing operator, provides fallback value
+- **??=** - Null-coalescing assignment, assigns only when null
+- `Nullable<T>.Value` throws `InvalidOperationException` if `HasValue` is false
+- **!** - Null-forgiving operator suppresses warnings (use sparingly)
+
+<Warning>
+When migrating legacy code to nullable, enable per-file with #nullable enable rather than project-wide — fix warnings incrementally.
+</Warning>
+
+## Enumerations
+
+Enums provide named, type-safe integral constants. They improve code readability and prevent invalid constant values.
+
+```csharp
+[Flags]
+public enum Permissions
+{
+    None  = 0,
+    Read  = 1 << 0,
+    Write = 1 << 1,
+    Admin = Read | Write,
+}
+bool canRead = perms.HasFlag(Permissions.Read);
+```
+
+### Enum Guidelines
+
+- Always specify explicit integer values for persisted/serialized enums
+- `[Flags]` attribute enables bitwise combination of enum members
+- `Enum.IsDefined` guards against invalid cast conversions
+- Use switch expressions for exhaustive enum pattern matching
+- Enum underlying types: `byte`, `short`, `int` (default), `long`
+
+<Tip>
+Always define explicit numeric values for enums stored in databases — reordering members without values will silently corrupt stored data.
+</Tip>
+
+## List&lt;T&gt;
+
+The most commonly used collection type in .NET. Provides dynamic array functionality with efficient random access.
+
+```csharp
+var orders = new List<Order>();
+orders.Add(new Order { Id = 1, Total = 99.99m });
+orders.AddRange(moreOrders);
+var first = orders.FirstOrDefault();
+```
+
+### List Features
+
+- Dynamic resizing - Grows automatically as needed
+- Efficient random access - O(1) by index
+- LINQ support - All standard query operators
+- `Capacity` - Pre-allocate to avoid resizing
+- `TrimExcess()` - Reduces memory footprint
+
+## Dictionary&lt;TKey, TValue&gt;
+
+Hash table providing fast key-based lookups.
+
+```csharp
+var cache = new Dictionary<string, Order>();
+cache["order-123"] = order;
+if (cache.TryGetValue("order-123", out var cached))
+    return cached;
+```
+
+### Dictionary Best Practices
+
+- Use `TryGetValue` instead of checking `ContainsKey` then indexing
+- Implement `IEquatable<T>` and override `GetHashCode` for custom keys
+- `ConcurrentDictionary<K,V>` for thread-safe scenarios
+- `IReadOnlyDictionary<K,V>` for read-only APIs
+
+## HashSet&lt;T&gt;
+
+Unordered collection of unique elements with O(1) membership testing.
+
+```csharp
+var processed = new HashSet<int>();
+foreach (var id in allIds)
+{
+    if (processed.Add(id)) // returns false if already present
+        await ProcessAsync(id);
+}
+```
+
+### Set Operations
+
+- `UnionWith` - Adds all elements from another collection
+- `IntersectWith` - Keeps only common elements
+- `ExceptWith` - Removes elements found in other collection
+- `SymmetricExceptWith` - XOR operation
+
+## Interfaces
+
+Interfaces define a set of members that implementing types must provide. Essential for dependency injection, testability, and cross-cutting concerns.
+
+```csharp
+public interface IEmailService
+{
+    Task SendAsync(string to, string subject);
+    // default impl — optional override
+    Task SendBulkAsync(IEnumerable<string> recipients, string subject)
+        => Task.WhenAll(recipients.Select(r => SendAsync(r, subject)));
+}
+```
+
+### Interface Features
+
+- **Default interface members** (C# 8+) - Enable non-breaking API evolution
+- **Explicit implementation** - Resolves member name conflicts
+- **Generic interfaces** - Enable covariant and contravariant usage
+- `IDisposable` and `IAsyncDisposable` - Manage resource lifetimes
+- Marker interfaces (empty) are superseded by attributes in most cases
+
+<Tip>
+Depend on interfaces, not concrete classes, in constructor parameters — this is the single most impactful change for testability.
+</Tip>
+
+## Polymorphism
+
+Polymorphism allows derived classes to override base class behavior, enabling open/closed extension without modifying existing code.
+
+```csharp
+public abstract class Shape
+{
+    public abstract double Area();
+    public virtual string Describe() => $"Area: {Area():F2}";
+}
+public sealed class Circle(double r) : Shape
+{
+    public override double Area() => Math.PI * r * r;
+}
+```
+
+### Polymorphism Concepts
+
+- `virtual` + `override` = runtime polymorphism via virtual dispatch
+- `abstract` members must be overridden in non-abstract derived classes
+- `sealed` prevents further derivation or method override
+- `new` keyword hides, not overrides — usually unintentional
+- Covariant return types (C# 9) allow overrides to return derived types
+
+<Note>
+Seal classes by default in domain models to prevent unintended extension — unseal explicitly when inheritance is a designed use case.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Abstract Base Classes" icon="diagram-project">
+    Share behavior among related types with abstract classes
+  </Card>
+  <Card title="Seal Concrete Classes" icon="lock">
+    Seal concrete leaf classes to convey intent and enable optimizations
+  </Card>
+</CardGroup>

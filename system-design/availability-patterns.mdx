@@ -1,0 +1,706 @@
+---
+title: Availability & Reliability Patterns
+description: High availability through replication, failover strategies, circuit breakers, and reliability patterns
+---
+
+## Availability Fundamentals
+
+Availability is the percentage of time a system is operational. Each additional "nine" reduces allowed downtime by approximately 10x.
+
+### SLA Nines
+
+| Availability | Downtime per Year | Downtime per Month | Downtime per Week |
+|--------------|-------------------|--------------------|-----------------|
+| 90% (one 9) | 36.5 days | 3 days | 16.8 hours |
+| 99% (two 9s) | 3.65 days | 7.2 hours | 1.68 hours |
+| 99.9% (three 9s) | 8.76 hours | 43.8 minutes | 10.1 minutes |
+| 99.99% (four 9s) | 52.6 minutes | 4.38 minutes | 1.01 minutes |
+| 99.999% (five 9s) | 5.26 minutes | 26.3 seconds | 6.05 seconds |
+
+<Warning>
+Five 9s (99.999%) requires zero-downtime deployments, automated failover, multi-region redundancy, and comprehensive chaos engineering. This is extremely expensive and only justified for critical financial or life-safety systems.
+</Warning>
+
+### Serial vs Parallel Availability
+
+**Serial dependencies** (all must be up):
+
+```text
+// End-to-end availability (serial)
+Load Balancer:  99.99%
+App Server:     99.9%
+PostgreSQL:     99.9%
+External API:   99.5%
+
+// Result: 0.9999 × 0.999 × 0.999 × 0.995
+= 0.9929 = 99.29% → fails even three 9s!
+
+// External API is the availability ceiling
+```
+
+**Parallel redundancy** (both must fail):
+
+```text
+// Parallel availability for two nodes
+Single node:     99.9%
+Two parallel:    1 - (1 - 0.999)² = 1 - 0.000001 = 99.9999% (five 9s!)
+
+// Three parallel nodes:
+1 - (1 - 0.999)³ = 99.999999% (eight 9s!)
+```
+
+<Note>
+Parallel redundancy dramatically improves availability. Two independent 99.9% nodes in parallel achieve 99.9999% availability — but only if failures are truly independent.
+</Note>
+
+## Replication Strategies
+
+### Master-Slave Replication
+
+All writes to primary, reads from replicas:
+
+```yaml
+# PostgreSQL streaming replication
+Primary (postgresql.conf):
+  wal_level: replica
+  max_wal_senders: 3
+  wal_keep_size: 1GB
+  
+Replica (standby.signal + postgresql.auto.conf):
+  primary_conninfo: 'host=primary port=5432 user=replicator'
+  hot_standby: on
+  max_standby_streaming_delay: 30s
+```
+
+**Architecture**:
+
+```text
+         ┌──────────┐
+         │ Primary  │
+         │  (Write) │
+         └────┬─────┘
+              │ WAL stream
+      ┌───────┼───────┐
+      ▼       ▼       ▼
+  ┌───────┬───────┬───────┐
+  │Replica│Replica│Replica│
+  │(Read) │(Read) │(Read) │
+  └───────┴───────┴───────┘
+```
+
+**Key concepts**:
+- **Synchronous replication**: Primary waits for replica ACK (slower writes, zero data loss)
+- **Asynchronous replication**: Primary doesn't wait (faster writes, possible data loss)
+- **Replication lag**: Time delay between primary write and replica visibility
+
+<Tabs>
+  <Tab title="Monitoring Lag">
+    ```sql
+    -- PostgreSQL: check replication lag on replica
+    SELECT 
+      now() - pg_last_xact_replay_timestamp() AS lag_duration,
+      pg_wal_lsn_diff(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn()) AS lag_bytes
+    FROM pg_stat_replication;
+    
+    -- Alert thresholds
+    -- Warning: lag > 5 seconds
+    -- Critical: lag > 30 seconds
+    ```
+  </Tab>
+  
+  <Tab title="Read Routing Strategy">
+    ```javascript
+    // Application-level read routing
+    class DatabasePool {
+      async read(query) {
+        // Random replica for load distribution
+        const replica = this.replicas[Math.floor(Math.random() * this.replicas.length)];
+        return replica.query(query);
+      }
+      
+      async write(query) {
+        // Always primary for writes
+        return this.primary.query(query);
+      }
+      
+      async readAfterWrite(query) {
+        // Read-your-own-writes: route to primary
+        return this.primary.query(query);
+      }
+    }
+    
+    // Usage
+    await db.write('INSERT INTO users ...');
+    await db.readAfterWrite('SELECT * FROM users WHERE id = ?');  // → primary
+    ```
+  </Tab>
+  
+  <Tab title="Synchronous Replication">
+    ```sql
+    -- PostgreSQL: configure synchronous replication
+    ALTER SYSTEM SET synchronous_commit = 'on';
+    ALTER SYSTEM SET synchronous_standby_names = 'FIRST 1 (replica1, replica2)';
+    SELECT pg_reload_conf();
+    
+    -- Primary waits for at least 1 replica ACK before commit
+    -- Trade-off: slower writes, zero data loss
+    ```
+    
+    <Warning>
+    Synchronous replication adds latency (typically 1-5ms) to every write. Use only for critical data (financial, inventory) where data loss is unacceptable.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Master-Master Replication
+
+Multiple writable nodes with conflict resolution:
+
+```text
+    ┌─────────┐      ┌─────────┐
+    │Master A │◄────►│Master B │
+    │us-east │      │eu-west  │
+    └─────────┘      └─────────┘
+         ▲                ▲
+         │                │
+    US clients      EU clients
+```
+
+**Conflict resolution strategies**:
+
+<Tabs>
+  <Tab title="Last Write Wins (LWW)">
+    ```sql
+    -- Timestamp-based conflict resolution
+    CREATE TABLE users (
+      id UUID PRIMARY KEY,
+      name TEXT,
+      email TEXT,
+      updated_at TIMESTAMP DEFAULT now()
+    );
+    
+    -- Conflict: both masters update same row
+    -- Master A: UPDATE users SET name='Alice' WHERE id=1; (at T+0s)
+    -- Master B: UPDATE users SET name='Bob' WHERE id=1;   (at T+2s)
+    
+    -- Result: 'Bob' wins (later timestamp)
+    ```
+    
+    **Pros**: Simple, deterministic
+    
+    **Cons**: Data loss (earlier write discarded)
+  </Tab>
+  
+  <Tab title="CRDT (Conflict-free Replicated Data Types)">
+    CRDTs mathematically guarantee convergence without conflicts:
+    
+    ```javascript
+    // G-Counter (grow-only counter) CRDT
+    class GCounter {
+      constructor(nodeId) {
+        this.nodeId = nodeId;
+        this.counts = {};  // { nodeId: count }
+      }
+      
+      increment() {
+        this.counts[this.nodeId] = (this.counts[this.nodeId] || 0) + 1;
+      }
+      
+      value() {
+        return Object.values(this.counts).reduce((a, b) => a + b, 0);
+      }
+      
+      merge(other) {
+        for (const [node, count] of Object.entries(other.counts)) {
+          this.counts[node] = Math.max(this.counts[node] || 0, count);
+        }
+      }
+    }
+    
+    // Node A increments 5 times
+    // Node B increments 3 times
+    // After merge: value() = 8 (no conflict)
+    ```
+    
+    **Examples**: Riak, Redis CRDTs, Automerge
+  </Tab>
+  
+  <Tab title="Application Merge">
+    ```javascript
+    // Application-level conflict resolution
+    function mergeUserProfiles(localVersion, remoteVersion) {
+      return {
+        id: localVersion.id,
+        // Take newer value per field
+        name: localVersion.name_updated_at > remoteVersion.name_updated_at
+          ? localVersion.name
+          : remoteVersion.name,
+        email: localVersion.email_updated_at > remoteVersion.email_updated_at
+          ? localVersion.email
+          : remoteVersion.email,
+        // Merge arrays
+        tags: [...new Set([...localVersion.tags, ...remoteVersion.tags])]
+      };
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+Use master-slave replication by default. Master-master adds significant complexity and should only be used for active-active multi-region deployments with geographic write distribution.
+</Tip>
+
+## Failover Patterns
+
+### Active-Passive (Hot Standby)
+
+Primary serves all traffic; standby takes over on failure:
+
+```text
+// Normal operation
+     ┌─────────┐
+     │   LB    │
+     └────┬────┘
+          │
+      ┌───▼────┐       ┌─────────┐
+      │Primary │──────►│ Standby │
+      │(ACTIVE)│ sync  │(PASSIVE)│
+      └────────┘       └─────────┘
+
+// After failover
+     ┌─────────┐
+     │   LB    │
+     └────┬────┘
+          │
+      ┌───┴────┐       ┌─────────┐
+      │Primary │       │ Standby │
+      │(FAILED)│       │(ACTIVE) │
+      └────────┘       └────┬────┘
+                            ▲
+                       promoted
+```
+
+**Failover timeline**:
+
+```text
+T+0s:  Primary node fails (process crash, hardware failure)
+T+5s:  Heartbeat timeout detected by orchestrator
+T+8s:  Replica promoted to primary (pg_ctl promote)
+T+10s: Load balancer updated to new primary IP
+T+70s: All clients with TTL=60s see new primary
+
+// Total outage: ~70 seconds (cannot meet 99.99% SLA)
+```
+
+<Warning>
+Active-passive failover typically takes 60-120 seconds due to health check timeout + promotion + DNS propagation. This is insufficient for five 9s (99.999% = 5.26 min/year downtime).
+</Warning>
+
+**Implementation: PostgreSQL with Patroni**
+
+```yaml
+# Patroni configuration (HA PostgreSQL)
+scope: postgres-cluster
+namespace: /service/
+name: node1
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576  # 1MB
+
+postgresql:
+  data_dir: /var/lib/postgresql/14/main
+  bin_dir: /usr/lib/postgresql/14/bin
+  parameters:
+    wal_level: replica
+    hot_standby: on
+    max_wal_senders: 5
+    max_replication_slots: 5
+    
+  # Automatic failover
+  use_pg_rewind: true
+  remove_data_directory_on_rewind_failure: true
+```
+
+### Active-Active (Multi-Master)
+
+All nodes serve traffic simultaneously:
+
+```text
+        ┌─────────┐
+        │   LB    │
+        └────┬────┘
+             │
+      ┌──────┼──────┐
+      ▼      ▼      ▼
+  ┌───────┬───────┬───────┐
+  │Node A │Node B │Node C │
+  │(ACTIVE│(ACTIVE│(ACTIVE│
+  └───┬───┴───┬───┴───┬───┘
+      └───────┼───────┘
+         replication
+```
+
+**Benefits**:
+- Utilizes all capacity (no idle standby)
+- Instant failover (LB health check removal)
+- Higher aggregate throughput
+
+**Trade-offs**:
+- Write conflicts require resolution
+- Eventual consistency
+- More complex application logic
+
+<Tip>
+Active-active is ideal for read-heavy workloads with infrequent writes. For write-heavy workloads, use active-passive to avoid write conflicts.
+</Tip>
+
+## Reliability Patterns
+
+### Circuit Breaker
+
+Prevent cascading failures by failing fast when error rate exceeds threshold:
+
+```text
+// State machine
+CLOSED: calls pass → error rate >50% in 30s → OPEN
+
+OPEN: fail-fast → after 60s timeout → HALF-OPEN
+
+HALF-OPEN: 1 probe call
+    success → CLOSED
+    fail    → OPEN (reset 60s)
+```
+
+**Implementation**:
+
+```javascript
+class CircuitBreaker {
+  constructor(options = {}) {
+    this.failureThreshold = options.failureThreshold || 5;
+    this.successThreshold = options.successThreshold || 2;
+    this.timeout = options.timeout || 60000;  // 60s
+    
+    this.state = 'CLOSED';
+    this.failures = 0;
+    this.successes = 0;
+    this.nextAttempt = Date.now();
+  }
+  
+  async call(fn) {
+    if (this.state === 'OPEN') {
+      if (Date.now() < this.nextAttempt) {
+        throw new Error('Circuit breaker is OPEN');
+      }
+      this.state = 'HALF-OPEN';
+    }
+    
+    try {
+      const result = await fn();
+      this.onSuccess();
+      return result;
+    } catch (err) {
+      this.onFailure();
+      throw err;
+    }
+  }
+  
+  onSuccess() {
+    this.failures = 0;
+    
+    if (this.state === 'HALF-OPEN') {
+      this.successes++;
+      if (this.successes >= this.successThreshold) {
+        this.state = 'CLOSED';
+        this.successes = 0;
+      }
+    }
+  }
+  
+  onFailure() {
+    this.failures++;
+    this.successes = 0;
+    
+    if (this.failures >= this.failureThreshold) {
+      this.state = 'OPEN';
+      this.nextAttempt = Date.now() + this.timeout;
+    }
+  }
+}
+
+// Usage
+const breaker = new CircuitBreaker({ failureThreshold: 5, timeout: 60000 });
+
+try {
+  const data = await breaker.call(() => externalAPI.get('/data'));
+} catch (err) {
+  // Circuit open: return cached data or default
+  return cachedData;
+}
+```
+
+<Note>
+Pair circuit breakers with fallback responses — when the circuit opens, return cached values, empty results, or feature degradation instead of propagating errors.
+</Note>
+
+### Bulkhead Pattern
+
+Isolate resources to prevent one failing component from exhausting shared resources:
+
+```javascript
+// Thread pool bulkhead (Java example)
+class BulkheadExecutor {
+  constructor() {
+    // Separate thread pools per dependency
+    this.dbPool = new ThreadPoolExecutor(10, 20, 60);
+    this.apiPool = new ThreadPoolExecutor(5, 10, 60);
+    this.searchPool = new ThreadPoolExecutor(3, 5, 60);
+  }
+  
+  // Slow external API can't exhaust DB pool
+  async queryDatabase(sql) {
+    return this.dbPool.submit(() => db.query(sql));
+  }
+  
+  async callExternalAPI(url) {
+    return this.apiPool.submit(() => http.get(url));
+  }
+}
+```
+
+```text
+// Without bulkhead: shared pool exhausted
+┌─────────────────────┐
+│  Thread Pool (50)   │
+│  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  │  ← all threads blocked on slow API
+└─────────────────────┘
+
+// With bulkhead: isolated pools
+┌──────────┬──────────┬──────────┐
+│ DB (20)  │ API (10) │Search (5)│
+│  ░░░     │  ▓▓▓▓▓▓▓ │  ░       │  ← API slow, but DB unaffected
+└──────────┴──────────┴──────────┘
+```
+
+### Retry with Exponential Backoff
+
+Retry transient failures with increasing delay:
+
+```javascript
+async function retryWithBackoff(fn, maxRetries = 5) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === maxRetries - 1) throw err;
+      
+      // Exponential backoff: 2^attempt × 100ms
+      const baseDelay = Math.pow(2, attempt) * 100;
+      
+      // Jitter: random ±50ms to prevent thundering herd
+      const jitter = Math.random() * 100 - 50;
+      
+      const delay = Math.min(baseDelay + jitter, 30000);  // cap at 30s
+      
+      console.log(`Retry ${attempt + 1}/${maxRetries} after ${delay}ms`);
+      await sleep(delay);
+    }
+  }
+}
+
+// Retry schedule with jitter
+// Attempt 1: ~100ms  (2^0 × 100)
+// Attempt 2: ~200ms  (2^1 × 100)
+// Attempt 3: ~400ms  (2^2 × 100)
+// Attempt 4: ~800ms  (2^3 × 100)
+// Attempt 5: ~1600ms (2^4 × 100)
+```
+
+<Warning>
+Without jitter, all clients retry simultaneously after failure, creating a "thundering herd" that overwhelms the recovering service. Always add randomness to retry delays.
+</Warning>
+
+### Health Checks
+
+<Tabs>
+  <Tab title="Liveness Probe">
+    **Question**: Is the process alive?
+    
+    **Action**: Restart if fails
+    
+    ```javascript
+    // Minimal liveness check
+    app.get('/health', (req, res) => {
+      res.status(200).json({ status: 'ok' });
+    });
+    ```
+    
+    <Note>
+    Liveness should only verify the process is responsive. Do NOT check external dependencies — that causes restart loops when dependencies are temporarily unavailable.
+    </Note>
+  </Tab>
+  
+  <Tab title="Readiness Probe">
+    **Question**: Can it serve traffic?
+    
+    **Action**: Remove from load balancer if fails
+    
+    ```javascript
+    // Readiness checks dependencies
+    app.get('/ready', async (req, res) => {
+      const checks = await Promise.all([
+        checkDatabase(),
+        checkRedis(),
+        checkDownstreamAPI()
+      ]);
+      
+      const ready = checks.every(c => c.ok);
+      const status = ready ? 200 : 503;
+      
+      res.status(status).json({ ready, checks });
+    });
+    ```
+  </Tab>
+  
+  <Tab title="Kubernetes Config">
+    ```yaml
+    apiVersion: v1
+    kind: Pod
+    spec:
+      containers:
+      - name: api
+        image: api:v1.0
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 2
+    ```
+  </Tab>
+</Tabs>
+
+## Background Jobs
+
+### Event-Driven Jobs
+
+```javascript
+// SQS queue consumer
+const { SQSClient, ReceiveMessageCommand, DeleteMessageCommand } = require('@aws-sdk/client-sqs');
+
+const sqs = new SQSClient({ region: 'us-east-1' });
+
+async function processQueue() {
+  while (true) {
+    const { Messages } = await sqs.send(new ReceiveMessageCommand({
+      QueueUrl: 'https://sqs.us-east-1.amazonaws.com/123/orders',
+      MaxNumberOfMessages: 10,
+      WaitTimeSeconds: 20  // long polling
+    }));
+    
+    if (!Messages) continue;
+    
+    for (const msg of Messages) {
+      try {
+        await processOrder(JSON.parse(msg.Body));
+        
+        // Delete after successful processing
+        await sqs.send(new DeleteMessageCommand({
+          QueueUrl: 'https://sqs.us-east-1.amazonaws.com/123/orders',
+          ReceiptHandle: msg.ReceiptHandle
+        }));
+      } catch (err) {
+        console.error('Processing failed:', err);
+        // Message returns to queue after visibility timeout
+      }
+    }
+  }
+}
+```
+
+### Schedule-Driven Jobs (Cron)
+
+```yaml
+# Kubernetes CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daily-report
+spec:
+  schedule: "0 2 * * *"  # 2am daily
+  concurrencyPolicy: Forbid  # prevent overlapping runs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: report-generator
+            image: reports:v1.0
+            command: ["python", "generate_daily_report.py"]
+          restartPolicy: OnFailure
+          activeDeadlineSeconds: 3600  # 1 hour timeout
+```
+
+<Tip>
+Set `concurrencyPolicy: Forbid` on all CronJobs to prevent overlapping runs. A slow job that overlaps the next schedule creates a "cron storm" that exhausts resources.
+</Tip>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Do: Calculate end-to-end availability across all dependencies">
+    Map your entire dependency chain and multiply availability percentages. An external API with 99.5% SLA prevents you from achieving better than 99.5% end-to-end.
+  </Accordion>
+  
+  <Accordion title="Do: Test failover monthly under production-equivalent load">
+    Failover that has never been exercised in production will fail when it matters most. Chaos engineering (Chaos Monkey) ensures graceful degradation.
+  </Accordion>
+  
+  <Accordion title="Do: Monitor replication lag and alert at 5s / 30s / 60s thresholds">
+    Rising replication lag signals that replicas cannot keep up with write load. This causes stale reads and eventually failover problems.
+  </Accordion>
+  
+  <Accordion title="Don't: Promise higher availability than your weakest dependency">
+    If your payment provider has 99.5% SLA, your checkout flow cannot exceed 99.5% availability regardless of your infrastructure.
+  </Accordion>
+  
+  <Accordion title="Don't: Use IP hash load balancing with NAT or mobile clients">
+    Many users share one NAT IP, creating severe load imbalance. Use consistent hashing or eliminate sticky sessions instead.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Load Balancing" icon="scale-balanced" href="/system-design/load-balancing">
+    Traffic distribution and health checking strategies
+  </Card>
+  
+  <Card title="Scalability" icon="chart-line" href="/system-design/scalability">
+    Horizontal scaling and autoscaling patterns
+  </Card>
+  
+  <Card title="Databases" icon="database" href="/system-design/databases">
+    Replication, connection pooling, and query optimization
+  </Card>
+  
+  <Card title="Caching" icon="bolt" href="/system-design/caching">
+    Design cache strategies for graceful degradation
+  </Card>
+</CardGroup>

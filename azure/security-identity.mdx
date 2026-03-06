@@ -1,0 +1,424 @@
+---
+title: Azure Security & Identity
+description: Master authentication, authorization, Key Vault, and managed identities for the AZ-204 exam
+---
+
+# Azure Security & Identity
+
+Security is a core component of the AZ-204 exam. Focus on **authentication patterns**, **managed identities**, **Key Vault**, and **RBAC**.
+
+## Authentication Patterns
+
+### Microsoft Identity Platform
+
+The Microsoft Identity Platform (Azure AD v2.0) is the unified authentication service for work/school accounts, personal Microsoft accounts, and Azure AD B2C.
+
+**Key Concepts:**
+
+- **v2.0 endpoint** - `login.microsoftonline.com/{tenant}/v2.0`
+- Supports **OAuth 2.0**, **OpenID Connect**, and **SAML**
+- **MSAL** (Microsoft Authentication Library) - Recommended SDK
+- **Scopes** - Delegated (user context) vs Application (app context)
+
+```csharp
+// MSAL PublicClientApplication for SPA/desktop
+var app = PublicClientApplicationBuilder
+    .Create("your-client-id")
+    .WithAuthority(AzureCloudInstance.AzurePublic, "your-tenant")
+    .WithRedirectUri("http://localhost")
+    .Build();
+
+var result = await app
+    .AcquireTokenInteractive(new[] { "User.Read" })
+    .ExecuteAsync();
+```
+
+### OAuth 2.0 Grant Types
+
+OAuth 2.0 defines several flows for obtaining access tokens.
+
+<Tabs>
+  <Tab title="Authorization Code + PKCE">
+    **Best for:** Web apps, SPAs, mobile apps
+    
+    - User interactive sign-in
+    - Most secure for public clients
+    - Replaced Implicit flow (deprecated)
+    - PKCE prevents authorization code interception
+  </Tab>
+  
+  <Tab title="Client Credentials">
+    **Best for:** Service-to-service, daemon apps
+    
+    - No user context
+    - Application permissions only
+    - Uses client secret or certificate
+    - Use managed identity when possible
+    
+    ```csharp
+    // Client Credentials flow
+    var app = ConfidentialClientApplicationBuilder
+        .Create(clientId)
+        .WithClientSecret(clientSecret)
+        .WithAuthority($"https://login.microsoftonline.com/{tenantId}")
+        .Build();
+    
+    var result = await app
+        .AcquireTokenForClient(new[] { "https://graph.microsoft.com/.default" })
+        .ExecuteAsync();
+    ```
+  </Tab>
+  
+  <Tab title="On-Behalf-Of (OBO)">
+    **Best for:** Middle-tier API calling downstream API
+    
+    - Preserves user context
+    - Middle tier exchanges user token for downstream token
+    - Maintains audit trail
+  </Tab>
+  
+  <Tab title="Device Code">
+    **Best for:** CLI tools, IoT devices
+    
+    - Input-constrained devices
+    - User authenticates on another device
+    - Shows code to enter on browser
+  </Tab>
+</Tabs>
+
+<Warning>
+  **ROPC (Resource Owner Password Credentials)** is an anti-pattern - avoid unless legacy required. It bypasses MFA and conditional access.
+</Warning>
+
+### OpenID Connect
+
+OpenID Connect (OIDC) is an authentication layer on top of OAuth 2.0.
+
+**Key Features:**
+
+- **ID token** - JWT with user identity claims (sub, email, name)
+- **UserInfo endpoint** - Returns additional claims
+- **Discovery** - `/.well-known/openid-configuration`
+- **Scopes** - `openid` (required), `profile`, `email`
+
+```csharp
+// Register OIDC in ASP.NET Core
+builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApp(builder.Configuration
+        .GetSection("AzureAd"));
+```
+
+```json
+// appsettings.json
+"AzureAd": {
+    "TenantId": "your-tenant-id",
+    "ClientId": "your-client-id",
+    "CallbackPath": "/signin-oidc"
+}
+```
+
+### App Registration
+
+App registration creates an application identity in Azure AD.
+
+**Key Components:**
+
+- **Application (client) ID** - Unique identity
+- **Service principal** - Per-tenant instantiation
+- **Redirect URIs** - Where tokens are sent
+- **API permissions** - Graph, custom APIs
+- **Expose an API** - Define scopes your API offers
+- **Certificates vs Secrets** - Certificates preferred
+
+```bash
+# Register app
+az ad app create \
+    --display-name "My API" \
+    --sign-in-audience AzureADMyOrg
+
+# Add app permission
+az ad app permission add \
+    --id <app-id> \
+    --api 00000003-0000-0000-c000-000000000000 \
+    --api-permissions e1fe6dd8-...=Scope
+
+# Create client secret
+az ad app credential reset --id <app-id>
+```
+
+<Tip>
+  Use **certificates** instead of client secrets for production - they don't expire on a fixed date and are harder to accidentally expose in source code.
+</Tip>
+
+## Azure Key Vault
+
+Key Vault stores secrets, keys, and certificates with HSM backing, RBAC, and audit logging.
+
+### Key Vault Management
+
+**Storage Types:**
+
+- **Secrets** - Passwords, connection strings, API keys
+- **Keys** - RSA/EC keys for encryption/signing (HSM-backed)
+- **Certificates** - X.509 certificates with auto-renewal
+
+```csharp
+// Access Key Vault with DefaultAzureCredential
+var client = new SecretClient(
+    new Uri("https://myvault.vault.azure.net/"),
+    new DefaultAzureCredential());
+
+var secret = await client.GetSecretAsync("myConnectionString");
+string value = secret.Value.Value;
+```
+
+```bash
+# App Service reference (no code needed)
+# App Setting: @Microsoft.KeyVault(SecretUri=https://vault.vault.azure.net/secrets/mySecret/)
+```
+
+<Note>
+  Use `DefaultAzureCredential` which chains through managed identity, environment, Visual Studio, and CLI credentials - same code works locally and in Azure.
+</Note>
+
+### Access Control Models
+
+Key Vault supports two authorization models.
+
+<Tabs>
+  <Tab title="Azure RBAC (Recommended)">
+    **Modern, standard Azure role assignments**
+    
+    - Built-in roles: Key Vault Secrets User, Key Vault Secrets Officer, Key Vault Administrator
+    - Scope to vault or individual secret/key
+    - Integrates with Azure Policy and PIM
+    - Supports deny assignments
+    
+    ```bash
+    # Enable RBAC
+    az keyvault update \
+        --name myVault \
+        --enable-rbac-authorization true
+    
+    # Assign Secrets User role
+    az role assignment create \
+        --role "Key Vault Secrets User" \
+        --assignee <object-id> \
+        --scope "/subscriptions/.../vaults/myVault"
+    ```
+  </Tab>
+  
+  <Tab title="Access Policies (Legacy)">
+    **Legacy permission model**
+    
+    - Per-principal permission bundles
+    - Separate permissions for Keys, Secrets, Certificates
+    - Cannot scope to individual secrets
+    - Simpler but less flexible
+    
+    ```bash
+    az keyvault set-policy \
+        --name myVault \
+        --object-id <object-id> \
+        --secret-permissions get list
+    ```
+  </Tab>
+</Tabs>
+
+### Secret Rotation
+
+Automate credential rotation to reduce exposure windows.
+
+**Rotation Pattern:**
+
+1. Key Vault secrets have **version history** and **expiry dates**
+2. **Near-expiry notification** via Event Grid
+3. **Azure Function** rotates secret (updates database password)
+4. Function updates Key Vault with new value
+5. App Service reference **auto-reloads** new version
+
+```csharp
+// Event Grid-triggered rotation Function
+[FunctionName("RotateSecret")]
+public static async Task Run(
+    [EventGridTrigger] EventGridEvent e)
+{
+    var detail = e.Data.ToObjectFromJson<SecretNearExpiryDetail>();
+    var newValue = await GenerateNewCredential();
+    await keyVaultClient.SetSecretAsync(
+        detail.ObjectName, newValue);
+}
+```
+
+<Tip>
+  Implement the **two-secret rotation pattern**: keep the old secret valid during rotation so no downtime occurs while apps restart with the new secret.
+</Tip>
+
+## Managed Identities
+
+Managed identities provide Azure services with an automatically managed Azure AD identity.
+
+### Identity Types
+
+<CardGroup cols={2}>
+  <Card title="System-Assigned" icon="microchip">
+    - **Lifecycle**: Tied to resource, deleted with resource
+    - **Scope**: One-to-one with resource
+    - **Use**: Single-service scenarios
+    - Enable via portal, CLI, or ARM
+  </Card>
+  <Card title="User-Assigned" icon="user">
+    - **Lifecycle**: Independent resource
+    - **Scope**: Shared across multiple resources
+    - **Use**: Multi-service scenarios
+    - Pre-authorized before deployment
+  </Card>
+</CardGroup>
+
+```bash
+# Enable system-assigned identity
+az webapp identity assign \
+    --name myApp \
+    --resource-group myRG
+
+# Create user-assigned identity
+az identity create \
+    --name myIdentity \
+    --resource-group myRG
+
+# Grant Key Vault Secrets User role
+az role assignment create \
+    --assignee <principal-id> \
+    --role "Key Vault Secrets User" \
+    --scope <keyVaultId>
+```
+
+```csharp
+// In code - no credentials needed
+var cred = new DefaultAzureCredential();
+var client = new SecretClient(vaultUri, cred);
+```
+
+<Warning>
+  Prefer **user-assigned** managed identity for production shared across multiple resources - it has independent lifecycle and can be pre-authorized before app deployment.
+</Warning>
+
+## Token Management
+
+Understanding token lifecycle and validation is critical.
+
+### Token Lifecycle
+
+**Token Types:**
+
+- **Access token** - Short-lived JWT (~1 hour)
+- **Refresh token** - Long-lived, gets new access tokens
+- **ID token** - User identity claims (OIDC)
+
+**MSAL Token Cache:**
+
+- In-memory by default
+- Serializable for web app sessions
+- Handles silent token refresh automatically
+
+```csharp
+// Validate JWT in ASP.NET Core API
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+
+// Acquire token silently
+try 
+{
+    var accounts = await app.GetAccountsAsync();
+    result = await app.AcquireTokenSilent(scopes, accounts.First())
+        .ExecuteAsync();
+} 
+catch (MsalUiRequiredException) 
+{
+    // Fall back to interactive flow
+}
+```
+
+<Tip>
+  Always try `AcquireTokenSilent` first - only fall back to `AcquireTokenInteractive` when `MsalUiRequiredException` is thrown. This prevents unnecessary user prompts.
+</Tip>
+
+## Azure RBAC
+
+Role-Based Access Control uses role assignments to grant permissions.
+
+### Role Assignments
+
+**Components:**
+
+- **Security principal** - User, group, service principal, managed identity
+- **Role definition** - Collection of permissions (Owner, Contributor, Reader, custom)
+- **Scope** - Management group, subscription, resource group, resource
+
+**Built-in Roles:**
+
+- **Owner** - Full control including managing access
+- **Contributor** - Create/manage resources, no access management
+- **Reader** - View only, no changes
+- Service-specific roles (Storage Blob Data Contributor, etc.)
+
+```bash
+# Assign Storage Blob Data Contributor
+az role assignment create \
+    --assignee <managed-identity-principal-id> \
+    --role "Storage Blob Data Contributor" \
+    --scope "/subscriptions/.../storageAccounts/myStorage"
+
+# List role assignments
+az role assignment list \
+    --scope <resourceId> \
+    --all
+```
+
+<Note>
+  Assign roles at the **narrowest scope** needed - a storage blob contributor shouldn't have that role across all storage accounts in the subscription.
+</Note>
+
+## Consent Framework
+
+The consent framework prompts users or admins to authorize app access to protected resources.
+
+**Consent Types:**
+
+- **User consent** - Grants delegated permission for own data
+- **Admin consent** - Grants permissions tenant-wide
+- **Admin consent required** - Application permissions, sensitive scopes
+- **Incremental consent** - Request scopes when needed
+
+```http
+# Request admin consent URL
+https://login.microsoftonline.com/{tenant}/adminconsent
+    ?client_id={app-id}
+    &redirect_uri={redirect}
+    &state={state}
+```
+
+```csharp
+// Incremental consent
+var result = await app.AcquireTokenInteractive(
+    new[] { "User.Read", "Files.ReadWrite" })
+    .WithPrompt(Prompt.Consent)
+    .ExecuteAsync();
+```
+
+<Tip>
+  Use **incremental (just-in-time) consent** - request only minimum scopes at sign-in and request additional scopes when user accesses features requiring them.
+</Tip>
+
+## Exam Checklist
+
+- [ ] Understand OAuth 2.0 grant types and when to use each
+- [ ] Know OpenID Connect flow and ID token claims
+- [ ] Understand app registration components
+- [ ] Know Key Vault secret, key, and certificate storage
+- [ ] Understand managed identity types and lifecycle
+- [ ] Know DefaultAzureCredential and credential chain
+- [ ] Understand RBAC role assignments and scopes
+- [ ] Know token lifecycle and MSAL patterns
+- [ ] Understand consent framework (user vs admin)
+- [ ] Know secret rotation patterns with Event Grid

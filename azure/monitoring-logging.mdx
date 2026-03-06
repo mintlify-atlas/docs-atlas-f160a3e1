@@ -1,0 +1,452 @@
+---
+title: Azure Monitoring & Logging
+description: Master Application Insights, performance tuning, and observability for the AZ-204 exam
+---
+
+# Azure Monitoring & Logging
+
+Observability is critical for production applications. The AZ-204 exam focuses on **Application Insights**, **performance optimization**, and **diagnostic logging**.
+
+## Application Insights
+
+Application Insights is Azure's Application Performance Monitoring (APM) service.
+
+### Telemetry Collection
+
+Application Insights automatically collects and tracks various telemetry types.
+
+**Auto-Collected Telemetry:**
+
+- **Requests** (req) - HTTP requests
+- **Dependencies** (dep) - Outgoing calls to SQL, HTTP, Blob, Service Bus
+- **Exceptions** (exc) - Unhandled exceptions
+- **Traces** (TRC) - Log statements
+- **Page Views** - Client-side page loads
+
+```csharp
+// Register in ASP.NET Core
+builder.Services.AddApplicationInsightsTelemetry(
+    builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]);
+
+// Custom telemetry
+private readonly TelemetryClient _tc;
+
+public void PlaceOrder(Order o)
+{
+    _tc.TrackEvent("OrderPlaced",
+        new { OrderId = o.Id, Amount = o.Total });
+    _tc.TrackMetric("OrderValue", (double)o.Total);
+}
+```
+
+<Note>
+  Use `APPLICATIONINSIGHTS_CONNECTION_STRING` app setting instead of deprecated InstrumentationKey - connection strings support sovereign clouds and include endpoint information.
+</Note>
+
+### Custom Events
+
+Track business events and user actions with custom telemetry.
+
+**Custom Event Usage:**
+
+- `TrackEvent(name, properties, measurements)`
+- **Properties** - String key-value pairs for filtering
+- **Measurements** - Numeric values for aggregation
+
+```csharp
+// Track business event with context
+_tc.TrackEvent("ProductViewed",
+    properties: new Dictionary<string, string>
+    {
+        ["ProductId"] = product.Id,
+        ["Category"] = product.Category,
+        ["UserId"] = user.Id
+    },
+    metrics: new Dictionary<string, double>
+    {
+        ["Price"] = (double)product.Price
+    });
+```
+
+```kusto
+// Query in Analytics (KQL)
+customEvents
+| where name == "ProductViewed"
+| summarize count() by tostring(customDimensions.Category)
+```
+
+<Tip>
+  Use properties **consistently** (same names, same casing) across events - inconsistent property names fragment analytics data.
+</Tip>
+
+### Dependency Tracking
+
+Application Insights auto-tracks outgoing calls as dependency telemetry.
+
+**Auto-Tracked:**
+
+- HttpClient calls
+- SQL (SqlClient)
+- Azure SDKs (Storage, Service Bus, Cosmos)
+- Redis, MongoDB
+
+```csharp
+// Automatic - just use HttpClient with App Insights SDK
+var response = await _httpClient.GetAsync("https://api.partner.com/data");
+// Tracked automatically as dep with target + duration
+
+// Custom dependency (e.g., external file system call)
+var start = DateTimeOffset.UtcNow;
+await ExternalSystemCallAsync();
+_tc.TrackDependency("FileSystem", "ReadFile",
+    "/data/file.csv", start, DateTimeOffset.UtcNow - start, true);
+```
+
+<Warning>
+  Set `cloud_RoleName` on each service's TelemetryInitializer - without it, the Application Map shows all services as the same node.
+</Warning>
+
+### Distributed Tracing
+
+End-to-end tracing links telemetry across microservices.
+
+**Key Concepts:**
+
+- **Operation.Id** - Root trace identifier (trace ID)
+- **Operation.ParentId** - Parent span identifier
+- **W3C TraceContext** - `traceparent` header standard
+- **End-to-End Transaction** - Timeline view in portal
+
+```csharp
+// Add custom operation to correlation tree
+using var op = _tc.StartOperation<RequestTelemetry>("CustomOperation");
+try
+{
+    await DoWorkAsync();
+    op.Telemetry.Success = true;
+}
+catch (Exception ex)
+{
+    op.Telemetry.Success = false;
+    _tc.TrackException(ex);
+    throw;
+}
+// Disposed automatically, flushes telemetry
+```
+
+<Tip>
+  Use **OpenTelemetry** + Azure Monitor Exporter for new projects - it's vendor-neutral and allows switching backends without SDK changes.
+</Tip>
+
+### Availability Testing
+
+Synthetic monitoring validates uptime from multiple locations.
+
+**Test Types:**
+
+- **Standard test** - URL ping on schedule (default 5 min)
+- **Multi-step web test** - Recorded HTTP sequence (deprecated)
+- **TrackAvailability()** - Programmatic custom tests
+
+```csharp
+// Custom TrackAvailability test
+var availability = new AvailabilityTelemetry
+{
+    Name = "OrderFlowTest",
+    RunLocation = "WestUS",
+    Success = false
+};
+var sw = Stopwatch.StartNew();
+try
+{
+    await RunOrderFlowAsync();
+    availability.Success = true;
+}
+finally
+{
+    availability.Duration = sw.Elapsed;
+    _tc.TrackAvailability(availability);
+}
+```
+
+<Note>
+  Run availability tests from at least **5 locations** and alert when **2+ locations fail** simultaneously - single location failures are often transient network issues.
+</Note>
+
+### Metric Alerts
+
+Azure Monitor alerts fire when metrics exceed thresholds.
+
+**Alert Types:**
+
+- **Static threshold** - Fixed value comparison
+- **Dynamic threshold** - ML-based normal range
+- **Evaluation frequency** - 1, 5, 15, 30, 60 minutes
+- **Aggregation** - avg, min, max, total, count
+
+```bash
+# Create metric alert
+az monitor metrics alert create \
+    --name "High CPU Alert" \
+    --resource-group myRG \
+    --scopes <appServicePlanId> \
+    --condition "avg Percentage CPU > 80" \
+    --window-size 5m \
+    --evaluation-frequency 1m \
+    --action <actionGroupId> \
+    --severity 2
+```
+
+<Tip>
+  Use **dynamic thresholds** instead of static for metrics with patterns (CPU higher at noon than midnight) - reduces false positives significantly.
+</Tip>
+
+## Performance Optimization
+
+### Caching Strategies
+
+Caching reduces database and API load by storing frequently accessed data.
+
+**Cache Patterns:**
+
+- **Cache-Aside** - App manages (read miss → DB fetch → cache store)
+- **Write-Through** - Write to cache and DB together
+- **Write-Behind** - Async write to DB
+
+```csharp
+// Cache-Aside with IDistributedCache
+public async Task<User> GetUserAsync(string id)
+{
+    var cached = await _cache.GetStringAsync($"user:{id}");
+    if (cached != null)
+        return JsonSerializer.Deserialize<User>(cached);
+
+    var user = await _db.GetUserAsync(id);
+    await _cache.SetStringAsync($"user:{id}",
+        JsonSerializer.Serialize(user),
+        new DistributedCacheEntryOptions 
+        { 
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) 
+        });
+    return user;
+}
+```
+
+<Warning>
+  Always set **TTL** on cached entries - caching without expiration creates stale data and memory pressure.
+</Warning>
+
+### Connection Pooling
+
+Reuse established connections to avoid expensive connection setup.
+
+**Best Practices:**
+
+- **ADO.NET** - Automatic pool per connection string
+- **HttpClient** - Singleton via IHttpClientFactory
+- **Redis** - Single multiplexed ConnectionMultiplexer
+
+```csharp
+// IHttpClientFactory - no socket exhaustion
+builder.Services.AddHttpClient();
+// Inject IHttpClientFactory, not HttpClient directly
+
+// Redis - singleton multiplexer
+builder.Services.AddSingleton(
+    ConnectionMultiplexer.Connect(redisConnStr));
+
+// SQL - pool config in connection string
+"Server=...;Database=...;Min Pool Size=5;Max Pool Size=100"
+```
+
+<Tip>
+  **Never** `new HttpClient()` per request - use IHttpClientFactory. **Never** `new ConnectionMultiplexer()` per request - it's the #1 Redis performance anti-pattern.
+</Tip>
+
+### Timeout Configurations
+
+Proper timeouts prevent resource exhaustion from slow dependencies.
+
+**Key Timeouts:**
+
+- **HttpClient.Timeout** - Default 100s (usually too long)
+- **SqlCommand.CommandTimeout** - 30s default
+- **CancellationToken** - Pass caller's cancellation context
+
+```csharp
+// Configure HttpClient timeout
+builder.Services.AddHttpClient<MyApiClient>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10);
+    client.BaseAddress = new Uri("https://api.example.com");
+})
+.AddPolicyHandler(HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .WaitAndRetryAsync(3, i => TimeSpan.FromSeconds(i)));
+
+// Per-operation timeout via CancellationToken
+using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+await httpClient.GetAsync(url, cts.Token);
+```
+
+<Note>
+  Use **Polly's timeout policy** around HttpClient calls - Polly can combine timeout, retry, and circuit breaker in a coherent resilience strategy.
+</Note>
+
+### Throughput Optimization
+
+Maximize requests per second through async patterns and parallelism.
+
+**Key Techniques:**
+
+- **Async all I/O** - Never block async code with `.Result` / `.Wait()`
+- **Parallel independent ops** - `Task.WhenAll` instead of sequential await
+- **Batch writes** - Reduce round trips
+- **HTTP/2** - Multiplex requests over single connection
+
+```csharp
+// Parallel independent operations
+var tasks = new[] 
+{ 
+    _userRepo.GetAsync(id1), 
+    _productRepo.GetAsync(id2),
+    _orderRepo.GetAsync(id3)
+};
+var results = await Task.WhenAll(tasks);
+
+// Cosmos bulk execution
+var cosmosOpts = new CosmosClientOptions 
+{ 
+    AllowBulkExecution = true 
+};
+```
+
+<Warning>
+  **Don't block async code** with `.Result`, `.Wait()`, or `.GetAwaiter().GetResult()` - this causes thread pool starvation and degrades throughput.
+</Warning>
+
+### Latency Reduction
+
+Minimize response time through architectural patterns.
+
+**Strategies:**
+
+- **CDN** - Serve static content from edge PoPs
+- **Redis cache** - Sub-millisecond responses for hot data
+- **Read replicas** - Distribute read load
+- **Always On** - Prevents App Service cold start
+- **Async HTTP APIs** - 202 Accepted + status polling
+
+```bash
+# Enable Always On
+az webapp config set \
+    --name myApp \
+    --resource-group myRG \
+    --always-on true
+```
+
+```csharp
+// Async HTTP 202 pattern
+// POST /orders → 202 Accepted + Location: /orders/1234/status
+// GET /orders/1234/status → 200 {status: "processing"}
+// GET /orders/1234/status → 200 {status: "complete", result: ...}
+```
+
+<Tip>
+  Use the **Async Request/Reply pattern** (202 + polling) for operations > 5 seconds - never keep HTTP connection open for long backend operations.
+</Tip>
+
+## Diagnostic Logging
+
+App Service diagnostic logging captures application and platform logs.
+
+**Log Types:**
+
+- **Application logging** - stdout/stderr to Storage/Blob
+- **Web server logging** - IIS logs
+- **Detailed error messages** - HTML error pages
+- **Failed request tracing** - FREB logs
+
+```bash
+# Enable application logging
+az webapp log config \
+    --name myApp \
+    --resource-group myRG \
+    --application-logging filesystem \
+    --level warning
+
+# Stream logs live
+az webapp log tail \
+    --name myApp \
+    --resource-group myRG
+
+# Download logs as zip
+az webapp log download \
+    --name myApp \
+    --resource-group myRG
+```
+
+<Warning>
+  File system logging is **temporary** (resets on restart) - route to Blob Storage or Log Analytics for persistent, queryable production logs.
+</Warning>
+
+## App Service Profiler
+
+Automatic performance profiling when thresholds are exceeded.
+
+**Features:**
+
+- **Auto CPU profiling** on performance degradation
+- **Snapshot Debugger** - Capture memory dumps on exceptions
+- **Kudu** - `/api/processes`, `/api/dump` for manual analysis
+- Near-zero overhead
+
+```bash
+# Kudu process memory dump via REST
+curl -X POST "https://<app>.scm.azurewebsites.net/api/processes/1/dump?dumpType=2"
+
+# CLI dotnet-trace (via SSH on App Service)
+dotnet-trace collect --pid 1 --duration 00:00:30
+dotnet-trace convert --format Speedscope trace.nettrace
+```
+
+<Tip>
+  App Service Profiler has near-zero overhead and runs automatically - **enable it on all production** App Insights-connected apps.
+</Tip>
+
+## Azure Dashboards
+
+Aggregate metrics and logs across services into shared views.
+
+**Dashboard Features:**
+
+- Pin tiles from any portal chart
+- Log Analytics query results as tiles
+- JSON export/import for dashboard-as-code
+- Share with portal users
+
+**Azure Workbooks:**
+
+- Interactive, parametrized dashboards
+- Combine metrics and log queries
+- Drill-down and conditional display
+
+<Note>
+  Use **Azure Workbooks** instead of static dashboards for complex observability scenarios - they support parameters, drill-down, and conditional display.
+</Note>
+
+## Exam Checklist
+
+- [ ] Understand Application Insights telemetry types
+- [ ] Know how to track custom events and metrics
+- [ ] Understand dependency tracking and Application Map
+- [ ] Know distributed tracing with Operation.Id
+- [ ] Understand availability testing patterns
+- [ ] Know metric alert types (static vs dynamic)
+- [ ] Understand caching strategies (Cache-Aside)
+- [ ] Know connection pooling best practices
+- [ ] Understand timeout configuration patterns
+- [ ] Know throughput optimization with async/await
+- [ ] Understand latency reduction strategies
+- [ ] Know diagnostic logging destinations
+- [ ] Understand App Service Profiler capabilities

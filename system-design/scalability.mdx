@@ -1,0 +1,405 @@
+---
+title: Scalability Patterns
+description: Horizontal scaling, sharding strategies, and techniques for handling growth
+---
+
+## Overview
+
+Scalability ensures the system handles more concurrent users without degrading performance. While performance optimization reduces latency per request through better algorithms and caching, scalability requires architectural patterns that distribute load across multiple nodes.
+
+<Note>
+You cannot always scale away a performance problem. Fix performance issues first, then scale horizontally to handle increased load.
+</Note>
+
+## Horizontal vs Vertical Scaling
+
+### Vertical Scaling (Scale Up)
+
+Adding more resources to a single machine:
+
+- **Pros**: Simple, no code changes, maintains data consistency
+- **Cons**: Hardware ceiling, cost increases exponentially, single point of failure
+- **Use when**: Premature to distribute, prototyping, specific workload bottleneck
+
+### Horizontal Scaling (Scale Out)
+
+Adding more machines to distribute load:
+
+- **Pros**: Near-infinite capacity, commodity hardware, improved availability
+- **Cons**: Complexity, distributed state management, eventual consistency
+- **Use when**: Stateless services, proven bottleneck, need high availability
+
+<Tip>
+Horizontal scaling works best for stateless services. State (sessions, caches, data) is the primary barrier to scaling out.
+</Tip>
+
+## Load Testing Strategy
+
+Distinguish performance from scalability problems using systematic load testing:
+
+```bash
+# k6 load test example
+k6 run --vus 1 --duration 30s script.js      # baseline performance
+k6 run --vus 100 --duration 30s script.js    # scalability test
+k6 run --vus 1000 --duration 30s script.js   # breaking point
+```
+
+### Metrics to Track
+
+- **P50/P95/P99 latency** at each load level
+- **Error rate** (5xx responses)
+- **RPS** (requests per second) sustained
+- **Resource utilization** (CPU, memory, connections)
+
+```text
+// Load test results analysis
+VUs    RPS    P99      Errors  CPU%
+1      50     120ms    0%      10%   ← good performance
+100    5000   180ms    0%      60%   ← scales well
+1000   8000   8500ms   15%     95%   ← bottleneck found
+
+// Diagnosis: connection pool exhausted at high concurrency
+```
+
+<Warning>
+Connection pool exhaustion is the most common scalability wall. Use connection poolers (PgBouncer, HikariCP) to push the limit higher.
+</Warning>
+
+## Database Scaling Patterns
+
+### Replication (Master-Slave)
+
+Route writes to primary, reads to replicas:
+
+```yaml
+# PostgreSQL streaming replication setup
+Primary (postgresql.conf):
+  wal_level: replica
+  max_wal_senders: 3
+  
+Replica (recovery.conf):
+  primary_conninfo: 'host=primary port=5432'
+  standby_mode: on
+
+# Replication lag monitoring
+SELECT now() - pg_last_xact_replay_timestamp() AS lag;
+```
+
+**Benefits**:
+- Read scaling via replicas
+- Single writer prevents write conflicts
+- Durability through redundancy
+
+**Limitations**:
+- Replication lag (replicas may lag by 10ms to seconds)
+- Write bottleneck at primary
+- Read-after-write requires routing to primary
+
+<Note>
+Always route read-after-write operations to the primary — a user who just submitted a form should see their own write, not a stale replica.
+</Note>
+
+### Federation (Vertical Partitioning)
+
+Split databases by domain or service boundary:
+
+```text
+// Federated databases per service
+user-service    → PostgreSQL (users, auth)
+order-service   → PostgreSQL (orders, items)
+session-store   → Redis
+search-index    → Elasticsearch
+```
+
+**Benefits**:
+- Eliminates cross-domain write contention
+- Independent scaling per domain
+- Service isolation
+
+**Trade-offs**:
+- Cross-domain joins become API calls
+- Distributed transactions complexity
+- Data duplication for performance
+
+<Tip>
+Start with domain-level database federation before sharding — federating by bounded context eliminates the most common write contention with less complexity than sharding.
+</Tip>
+
+### Sharding (Horizontal Partitioning)
+
+Split data across multiple database nodes, each owning a range of the key space:
+
+```text
+// Hash sharding example
+shard_id = hash(user_id) % 4
+Shard 0: hash(user_id)%4==0
+Shard 1: hash(user_id)%4==1
+Shard 2: hash(user_id)%4==2
+Shard 3: hash(user_id)%4==3
+
+// Cross-shard query (avoid — hits all shards)
+// SELECT * FROM orders WHERE total > 100
+// → scatter to all 4 shards → merge 4 result sets
+```
+
+#### Sharding Strategies
+
+<Tabs>
+  <Tab title="Hash Sharding">
+    **Method**: `shard = hash(key) % N`
+    
+    **Pros**:
+    - Even distribution
+    - Simple implementation
+    - No hotspots
+    
+    **Cons**:
+    - No range queries possible
+    - Resharding requires full data migration
+    - Cross-shard queries expensive
+    
+    **Use for**: User data, session data, any key-value access
+  </Tab>
+  
+  <Tab title="Range Sharding">
+    **Method**: Partition by key ranges (1-1000, 1001-2000, etc.)
+    
+    **Pros**:
+    - Range queries within a shard
+    - Easier to rebalance
+    - Predictable data location
+    
+    **Cons**:
+    - Hotspot risk (sequential IDs)
+    - Manual rebalancing
+    - Uneven distribution possible
+    
+    **Use for**: Time-series data, sequential IDs with known distribution
+  </Tab>
+  
+  <Tab title="Consistent Hashing">
+    **Method**: Virtual nodes on a hash ring
+    
+    **Pros**:
+    - Adding node remaps only ~1/N of keys
+    - Smooth resharding
+    - Minimal disruption
+    
+    **Cons**:
+    - More complex implementation
+    - Virtual to physical mapping overhead
+    
+    **Use for**: Cache tier load balancing, distributed caches
+  </Tab>
+</Tabs>
+
+#### Shard Key Selection
+
+<Warning>
+Shard key selection is the most critical sharding decision. A poor shard key creates hotspots and cannot be changed without full data migration.
+</Warning>
+
+**Good shard key properties**:
+- **High cardinality**: Many distinct values
+- **Even write distribution**: No single key dominates traffic
+- **Query-aligned**: Include in WHERE clause of frequent queries
+- **Immutable**: Changing the key requires moving data
+
+```javascript
+// Good shard keys
+user_id        // high cardinality, even distribution
+email_hash     // unique per user, immutable
+tenant_id      // multi-tenant SaaS
+
+// Bad shard keys
+status         // low cardinality (only 3-5 values)
+created_date   // time-based hotspot (all writes to latest shard)
+country_code   // geographic skew (US gets 70% of traffic)
+```
+
+### Virtual Sharding
+
+Many logical shards mapped to fewer physical servers:
+
+```text
+// 256 virtual shards → 4 physical servers
+Virtual 0-63   → Physical Server 1
+Virtual 64-127 → Physical Server 2
+Virtual 128-191 → Physical Server 3
+Virtual 192-255 → Physical Server 4
+
+// Add Server 5: remap only virtual shards 192-255
+// No full data migration required
+```
+
+**Benefits**:
+- Smooth resharding by remapping virtuals
+- Enables incremental scale-out
+- Reduces blast radius of rebalancing
+
+<Tip>
+Use virtual shards (logical → physical) to enable resharding without full data migration. Start with 10-20x more virtual shards than physical nodes.
+</Tip>
+
+## Denormalization for Read Scale
+
+Introduce redundancy to eliminate joins and improve read performance:
+
+```sql
+-- Normalized (requires JOIN at read time)
+SELECT o.id, u.name, SUM(i.price) as total
+FROM orders o
+JOIN users u ON o.user_id = u.id
+JOIN items i ON i.order_id = o.id
+GROUP BY o.id, u.name;
+
+-- Denormalized materialized view (pre-computed)
+CREATE MATERIALIZED VIEW order_summary AS
+SELECT o.id, u.name, SUM(i.price) total
+FROM orders o JOIN users u ON o.user_id = u.id
+JOIN items i ON i.order_id = o.id
+GROUP BY o.id, u.name;
+
+REFRESH MATERIALIZED VIEW CONCURRENTLY order_summary;
+```
+
+### CQRS Pattern
+
+Separate **Command** (write) model from **Query** (read) model:
+
+```text
+// CQRS architecture
+Command side (writes):
+  API → Service → PostgreSQL (normalized, ACID)
+        ↓ event
+  Event Bus (Kafka)
+        ↓
+Query side (reads):
+  Event Handler → Elasticsearch (denormalized, optimized for search)
+  
+User reads always hit query side (fast, denormalized)
+User writes always hit command side (consistent, normalized)
+```
+
+**When to use**:
+- Read/write ratio > 10:1
+- Complex query requirements differ from write validation
+- Need multiple read representations (search, analytics, cache)
+
+<Note>
+CQRS adds significant complexity. Start with read replicas and materialized views; move to CQRS only when those patterns are insufficient.
+</Note>
+
+## Autoscaling Strategies
+
+### Kubernetes Horizontal Pod Autoscaler
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-server
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-server
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "1000"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # wait 5 min before scaling down
+    scaleUp:
+      stabilizationWindowSeconds: 0    # scale up immediately
+```
+
+### KEDA (Event-Driven Autoscaling)
+
+Scale based on queue depth, not just CPU:
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: queue-consumer
+spec:
+  scaleTargetRef:
+    name: worker
+  minReplicaCount: 1
+  maxReplicaCount: 50
+  triggers:
+  - type: aws-sqs-queue
+    metadata:
+      queueURL: https://sqs.us-east-1.amazonaws.com/123/orders
+      queueLength: "10"  # target 10 messages per pod
+      awsRegion: us-east-1
+```
+
+<Tip>
+Use KEDA for queue consumers — scaling on queue depth (lag) is more accurate than CPU utilization for async workloads.
+</Tip>
+
+## Common Anti-Patterns
+
+<AccordionGroup>
+  <Accordion title="Premature Sharding">
+    **Problem**: Sharding before proving single-DB bottleneck
+    
+    **Solution**: 
+    1. Optimize queries and add indexes
+    2. Add read replicas
+    3. Implement caching
+    4. Federation by domain
+    5. Shard only if still bottlenecked
+  </Accordion>
+  
+  <Accordion title="Shared Database Across Services">
+    **Problem**: Multiple services writing to the same tables
+    
+    **Impact**: Write contention, deployment coupling, schema migration nightmares
+    
+    **Solution**: Database per service (federation), communicate via APIs or events
+  </Accordion>
+  
+  <Accordion title="Cross-Shard Queries in Hot Path">
+    **Problem**: SELECT without shard key hits all shards
+    
+    **Impact**: Latency proportional to shard count, amplifies load
+    
+    **Solution**: Include shard key in all queries, or denormalize data for that access pattern
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Databases" icon="database" href="/system-design/databases">
+    Deep dive into SQL tuning, NoSQL patterns, and indexing strategies
+  </Card>
+  
+  <Card title="Caching" icon="bolt" href="/system-design/caching">
+    Multi-layer caching strategies to reduce database load
+  </Card>
+  
+  <Card title="Load Balancing" icon="scale-balanced" href="/system-design/load-balancing">
+    Traffic distribution algorithms and health checking
+  </Card>
+  
+  <Card title="Availability" icon="shield-check" href="/system-design/availability-patterns">
+    High availability through replication and failover
+  </Card>
+</CardGroup>

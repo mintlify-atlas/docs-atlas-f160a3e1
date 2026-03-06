@@ -1,0 +1,197 @@
+---
+title: AZ-204 Certification Overview
+description: Complete guide to preparing for the Azure Developer Associate (AZ-204) certification exam covering compute, storage, security, integration, and monitoring
+---
+
+# AZ-204 Exam Preparation Guide
+
+The **AZ-204: Developing Solutions for Microsoft Azure** certification validates your ability to design, build, test, and maintain cloud applications and services on Microsoft Azure.
+
+## Exam Structure
+
+The AZ-204 exam covers five major topic areas:
+
+<CardGroup cols={2}>
+  <Card title="Compute Solutions" icon="server" href="/azure/compute-services">
+    Azure App Service, Functions, and container solutions
+  </Card>
+  <Card title="Storage Solutions" icon="database" href="/azure/storage-solutions">
+    Cosmos DB, Blob Storage, and data management
+  </Card>
+  <Card title="Security & Identity" icon="shield" href="/azure/security-identity">
+    Authentication, authorization, and Key Vault
+  </Card>
+  <Card title="Cloud Integration" icon="plug" href="/azure/cloud-integration">
+    API Management, Service Bus, and Event Grid
+  </Card>
+  <Card title="Monitoring & Logging" icon="chart-line" href="/azure/monitoring-logging">
+    Application Insights and performance tuning
+  </Card>
+</CardGroup>
+
+## Key Skills Measured
+
+### Develop Azure compute solutions (25-30%)
+
+- Implement containerized solutions
+- Implement Azure App Service Web Apps
+- Implement Azure Functions
+
+### Develop for Azure storage (15-20%)
+
+- Develop solutions that use Azure Cosmos DB
+- Develop solutions that use Azure Blob Storage
+
+### Implement Azure security (20-25%)
+
+- Implement user authentication and authorization
+- Implement secure Azure solutions
+
+### Monitor, troubleshoot, and optimize Azure solutions (15-20%)
+
+- Integrate caching and content delivery
+- Instrument solutions for monitoring and logging
+
+### Connect to and consume Azure services (15-20%)
+
+- Implement API Management
+- Develop event-based solutions
+- Develop message-based solutions
+
+## Study Approach
+
+<Note>
+  The AZ-204 exam tests both **theoretical knowledge** and **hands-on experience**. You must understand architectural patterns, service limits, pricing tiers, and CLI/SDK usage.
+</Note>
+
+### Recommended Study Path
+
+1. **Foundation** - Understand Azure fundamentals and core services
+2. **Deep Dive** - Study each exam topic area in detail
+3. **Hands-On** - Build projects using Azure services
+4. **Practice** - Complete practice exams and scenario questions
+5. **Review** - Focus on weak areas identified in practice
+
+### Essential Tools & Resources
+
+<Tabs>
+  <Tab title="Azure CLI">
+    The Azure CLI is essential for the exam. Know how to:
+    
+    ```bash
+    # Create resources
+    az group create --name myRG --location eastus
+    az appservice plan create --name myPlan --resource-group myRG --sku S1
+    az webapp create --name myApp --resource-group myRG --plan myPlan
+    
+    # Configure settings
+    az webapp config appsettings set --name myApp --settings KEY=value
+    
+    # Monitor and troubleshoot
+    az webapp log tail --name myApp --resource-group myRG
+    ```
+  </Tab>
+  
+  <Tab title="Azure SDKs">
+    Understand SDK usage patterns:
+    
+    ```csharp
+    // Azure Storage Blob SDK
+    var blobClient = new BlobServiceClient(connectionString);
+    var container = blobClient.GetBlobContainerClient("container");
+    await container.CreateIfNotExistsAsync();
+    
+    // Azure Cosmos DB SDK
+    var cosmosClient = new CosmosClient(endpoint, key);
+    var database = cosmosClient.GetDatabase("myDb");
+    var container = database.GetContainer("myContainer");
+    
+    // Application Insights
+    var telemetry = new TelemetryClient();
+    telemetry.TrackEvent("OrderPlaced");
+    ```
+  </Tab>
+  
+  <Tab title="Azure Portal">
+    Know how to navigate and configure:
+    - Resource creation and management
+    - Monitoring dashboards and metrics
+    - Access control (IAM)
+    - Cost Management
+    - Diagnostic settings
+  </Tab>
+</Tabs>
+
+## Exam Tips
+
+<Warning>
+  The exam includes scenario-based questions requiring you to choose the **best** solution, not just a working solution. Consider cost, performance, security, and maintainability.
+</Warning>
+
+### Common Exam Topics
+
+- **Service tier selection** - Know which tier enables specific features (e.g., Standard minimum for deployment slots)
+- **Authentication patterns** - OAuth flows, managed identities, Easy Auth
+- **Scaling strategies** - Manual vs autoscale, vertical vs horizontal
+- **Data consistency** - Cosmos DB consistency levels and their tradeoffs
+- **Security best practices** - Key Vault, managed identities, RBAC
+- **Integration patterns** - Queue vs Event Grid vs Service Bus
+- **Performance optimization** - Caching, CDN, connection pooling
+
+### Do's and Don'ts
+
+<Tabs>
+  <Tab title="Do">
+    ✓ Understand **why** you'd choose one service over another
+    
+    ✓ Know pricing tier features and limitations
+    
+    ✓ Practice with Azure CLI and Portal
+    
+    ✓ Study ARM templates and Bicep syntax
+    
+    ✓ Understand security best practices (managed identities, Key Vault)
+    
+    ✓ Know monitoring and diagnostics tools
+  </Tab>
+  
+  <Tab title="Don't">
+    ✗ Don't memorize without understanding concepts
+    
+    ✗ Don't skip hands-on practice
+    
+    ✗ Don't ignore service limitations and quotas
+    
+    ✗ Don't overlook cost optimization questions
+    
+    ✗ Don't forget to read questions carefully (look for "best" solution)
+    
+    ✗ Don't spend too long on one question - flag and move on
+  </Tab>
+</Tabs>
+
+## Exam Format
+
+- **Duration**: 120 minutes
+- **Questions**: 40-60 questions
+- **Format**: Multiple choice, multiple answer, drag-and-drop, case studies
+- **Passing Score**: 700/1000
+- **Valid for**: 1 year (renewals available)
+
+<Tip>
+  Time management is critical. Allocate roughly 2 minutes per question. Flag difficult questions and return to them after completing easier ones.
+</Tip>
+
+## Next Steps
+
+Begin your preparation by diving into each topic area:
+
+1. [Compute Services](/azure/compute-services) - Start with App Service and Functions
+2. [Storage Solutions](/azure/storage-solutions) - Master Cosmos DB and Blob Storage
+3. [Security & Identity](/azure/security-identity) - Understand authentication patterns
+4. [Cloud Integration](/azure/cloud-integration) - Learn messaging and event patterns
+5. [Monitoring & Logging](/azure/monitoring-logging) - Implement observability
+
+<Note>
+  Build a sample application that uses multiple Azure services. This hands-on experience is invaluable for understanding how services integrate and for answering scenario-based exam questions.
+</Note>

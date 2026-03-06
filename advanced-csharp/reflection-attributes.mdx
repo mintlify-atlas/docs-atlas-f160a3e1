@@ -1,0 +1,450 @@
+---
+title: 'Reflection & Attributes'
+description: 'Master runtime type inspection, dynamic programming, and attribute-driven frameworks using reflection, dynamic types, ExpandoObject, and the Dynamic Language Runtime (DLR).'
+---
+
+## Overview
+
+Reflection enables runtime inspection and invocation of types, methods, and properties by reading metadata from assemblies. Combined with attributes and dynamic types, it powers serializers, DI containers, ORMs, and test frameworks.
+
+## Type Inspection & Reflection
+
+Reflection allows runtime inspection and invocation of types, methods, and properties by reading metadata from assemblies. It powers serializers, DI containers, ORMs, and test frameworks.
+
+<Note>
+Reflection reads IL metadata at runtime — type names, method signatures, attributes, and generics. It enables late binding (calling methods by name string), plugin loading, and attribute-driven frameworks.
+</Note>
+
+### Key Reflection APIs
+
+- **typeof(T)**: compile-time type token — no runtime cost
+- **GetType()**: runtime type token — works on object references including polymorphic types
+- **Assembly.Load()**: loads an assembly by name; Assembly.LoadFile() by path
+- **Type.GetMethods(BindingFlags)**: discovers methods including private/static
+- **MethodInfo.Invoke()**: late-bound method call — slow, allocates, no type safety
+- **Expression trees + compiled delegates**: cache reflected calls for 10-100× speed improvement
+
+### Performance Comparison
+
+| Approach | Relative Speed | Type Safety | Use Case |
+|----------|---------------|-------------|----------|
+| Direct call | 1× (baseline) | Compile-time | Normal code |
+| Compiled expression | 1-2× | Compile-time (after compilation) | Cached reflection |
+| Delegate.CreateDelegate | 1-2× | Compile-time | Method pointer caching |
+| MethodInfo.Invoke | 100-1000× slower | Runtime only | One-off reflection |
+| dynamic (DLR) | 10-100× slower | Runtime only | COM interop, scripting |
+
+### Basic Reflection Example
+
+```csharp
+// Reflection: inspect type members
+var type = typeof(Order);
+var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+foreach (var p in props)
+    Console.WriteLine($"{p.Name}: {p.PropertyType.Name}");
+
+// Late binding: invoke method by name
+var method = type.GetMethod("Validate");
+var order = new Order();
+method?.Invoke(order, null); // Slow, allocates
+
+// Discover attributes
+var attrs = type.GetCustomAttributes<ValidationAttribute>();
+foreach (var attr in attrs)
+    Console.WriteLine($"Validation: {attr.ErrorMessage}");
+```
+
+<Warning>
+Unoptimized reflection is 100-1000× slower than direct calls. The cost includes: metadata lookup, security checks, parameter boxing, and lack of JIT optimization.
+</Warning>
+
+## Compiled Expression Trees
+
+For performance-critical reflection code, compile expression trees to cached delegates.
+
+```csharp
+// Compiled delegate: cache for fast repeated calls
+var type = typeof(Order);
+var method = type.GetMethod("Validate")!;
+var param  = Expression.Parameter(typeof(Order));
+var call   = Expression.Call(param, method);
+var fn     = Expression.Lambda<Action<Order>>(call, param).Compile();
+
+// fn(order) — now near-direct-call speed after JIT
+for (int i = 0; i < 1000000; i++)
+{
+    fn(order); // Fast: compiled delegate
+}
+
+// vs slow reflection
+for (int i = 0; i < 1000000; i++)
+{
+    method.Invoke(order, null); // Slow: 100-1000× slower
+}
+```
+
+<Tip>
+Cache compiled expression trees as static delegates — the compilation cost is paid once, and subsequent invocations run at near-direct-call speed compared to MethodInfo.Invoke() on every call.
+</Tip>
+
+### Property Access Optimization
+
+<Tabs>
+  <Tab title="Direct Access">
+    ```csharp
+    // Direct property access (baseline)
+    var order = new Order { Id = 123 };
+    int id = order.Id; // ~0.3ns
+    ```
+  </Tab>
+  <Tab title="Reflection (Slow)">
+    ```csharp
+    // Reflection: slow
+    var prop = typeof(Order).GetProperty("Id");
+    int id = (int)prop.GetValue(order)!; // ~150ns (500× slower)
+    ```
+  </Tab>
+  <Tab title="Compiled Expression (Fast)">
+    ```csharp
+    // Compiled expression: fast
+    var param = Expression.Parameter(typeof(Order));
+    var prop = Expression.Property(param, "Id");
+    var lambda = Expression.Lambda<Func<Order, int>>(prop, param);
+    var getter = lambda.Compile();
+    
+    int id = getter(order); // ~1ns (only 3× slower)
+    ```
+  </Tab>
+  <Tab title="Delegate.CreateDelegate (Fastest)">
+    ```csharp
+    // Delegate.CreateDelegate: fastest reflection approach
+    var prop = typeof(Order).GetProperty("Id");
+    var getter = (Func<Order, int>)Delegate.CreateDelegate(
+        typeof(Func<Order, int>), 
+        prop.GetMethod!);
+    
+    int id = getter(order); // ~0.5ns (fastest reflection option)
+    ```
+  </Tab>
+</Tabs>
+
+## Attributes
+
+Attributes are metadata attached to types, methods, properties, and parameters. They drive frameworks, validation, serialization, and code generation.
+
+### Custom Attribute Definition
+
+```csharp
+// Custom attribute
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Property, 
+                AllowMultiple = true)]
+public class ValidateAttribute : Attribute
+{
+    public string ErrorMessage { get; set; }
+    public int MinLength { get; set; }
+    
+    public ValidateAttribute(string errorMessage)
+    {
+        ErrorMessage = errorMessage;
+    }
+}
+
+// Usage
+[Validate("Order must be valid")]
+public class Order
+{
+    [Validate("Name is required", MinLength = 3)]
+    public string Name { get; set; }
+    
+    [Validate("Price must be positive")]
+    public decimal Price { get; set; }
+}
+```
+
+### Attribute Reflection
+
+```csharp
+// Discover and process attributes
+public class Validator
+{
+    public static List<string> Validate(object obj)
+    {
+        var errors = new List<string>();
+        var type = obj.GetType();
+        
+        // Check type-level attributes
+        var typeAttrs = type.GetCustomAttributes<ValidateAttribute>();
+        
+        // Check property-level attributes
+        foreach (var prop in type.GetProperties())
+        {
+            var attrs = prop.GetCustomAttributes<ValidateAttribute>();
+            foreach (var attr in attrs)
+            {
+                var value = prop.GetValue(obj);
+                
+                if (value is string str && attr.MinLength > 0)
+                {
+                    if (str.Length < attr.MinLength)
+                        errors.Add(attr.ErrorMessage);
+                }
+            }
+        }
+        
+        return errors;
+    }
+}
+
+// Usage
+var order = new Order { Name = "AB", Price = -10 };
+var errors = Validator.Validate(order);
+// errors: ["Name is required", "Price must be positive"]
+```
+
+### Common Framework Attributes
+
+<CardGroup cols={2}>
+  <Card title="Serialization" icon="code">
+    ```csharp
+    [Serializable]
+    [DataContract]
+    public class Order
+    {
+        [DataMember]
+        [JsonPropertyName("order_id")]
+        public int Id { get; set; }
+        
+        [JsonIgnore]
+        public string Internal { get; set; }
+    }
+    ```
+  </Card>
+  <Card title="Dependency Injection" icon="link">
+    ```csharp
+    [Service(Lifetime = ServiceLifetime.Scoped)]
+    public class OrderService
+    {
+        [Inject]
+        public ILogger Logger { get; set; }
+        
+        public OrderService(
+            [FromServices] IRepository repo)
+        {
+        }
+    }
+    ```
+  </Card>
+  <Card title="Validation" icon="check">
+    ```csharp
+    public class CreateOrderDto
+    {
+        [Required]
+        [StringLength(100, MinimumLength = 3)]
+        public string Name { get; set; }
+        
+        [Range(0.01, 10000)]
+        public decimal Price { get; set; }
+    }
+    ```
+  </Card>
+  <Card title="Testing" icon="flask">
+    ```csharp
+    [TestClass]
+    public class OrderTests
+    {
+        [TestMethod]
+        [DataRow(1, "Order1")]
+        [DataRow(2, "Order2")]
+        public void TestOrder(int id, string name)
+        {
+            // Test logic
+        }
+    }
+    ```
+  </Card>
+</CardGroup>
+
+## Dynamic & ExpandoObject
+
+The `dynamic` keyword defers member resolution from compile time to runtime via the Dynamic Language Runtime (DLR). ExpandoObject allows adding members at runtime like a property bag.
+
+<Warning>
+dynamic bypasses the C# type system — the compiler generates DLR call-site code that resolves members at runtime. It is useful for COM interop, Python/JavaScript interop, and consuming weakly-typed data (JSON).
+</Warning>
+
+### Dynamic Type Behavior
+
+- **dynamic**: no compile-time type checking; RuntimeBinderException if member missing at runtime
+- **DLR call site**: first call is slow (resolution + caching); subsequent calls use cached binding
+- **ExpandoObject**: add properties at runtime; supports data binding via INotifyPropertyChanged
+- **IDynamicMetaObjectProvider**: implement to give custom objects dynamic dispatch behavior
+- **Expression trees**: DLR compiles member access to expression trees for efficient repeated dispatch
+- **COM interop**: dynamic eliminates thousands of casts — Office automation becomes readable
+
+### ExpandoObject Example
+
+```csharp
+// ExpandoObject: runtime property bag
+dynamic person = new ExpandoObject();
+person.Name    = "Alice";
+person.Age     = 30;
+person.Greet   = (Func<string>)(() => $"Hi, {person.Name}!");
+string g = person.Greet(); // "Hi, Alice!"
+
+// Access as dictionary
+var dict = (IDictionary<string, object>)person;
+dict["Email"] = "alice@example.com";
+Console.WriteLine(person.Email); // alice@example.com
+
+// Iterate properties
+foreach (var kvp in dict)
+{
+    Console.WriteLine($"{kvp.Key}: {kvp.Value}");
+}
+```
+
+### COM Interop with Dynamic
+
+```csharp
+// Without dynamic: cast-heavy COM code
+Excel.Application excel = new Excel.Application();
+excel.Visible = true;
+Excel.Workbooks workbooks = (Excel.Workbooks)excel.Workbooks;
+Excel.Workbook workbook = (Excel.Workbook)workbooks.Add();
+Excel.Sheets sheets = (Excel.Sheets)workbook.Sheets;
+Excel.Worksheet sheet = (Excel.Worksheet)sheets[1];
+Excel.Range range = (Excel.Range)sheet.Cells[1, 1];
+range.Value = "Hello";
+
+// With dynamic: readable COM code
+dynamic excel = Activator.CreateInstance(
+    Type.GetTypeFromProgID("Excel.Application")!);
+excel.Visible = true;
+excel.Workbooks.Add();
+excel.Sheets[1].Cells[1, 1].Value = "Hello";
+```
+
+<Tip>
+Avoid dynamic in performance-sensitive code paths — DLR call-site resolution is 100-1000× slower than compiled code. Prefer source generators (C# 10+) or compiled expression trees for metadata-driven APIs.
+</Tip>
+
+### Dynamic JSON Handling
+
+```csharp
+// Parse JSON to dynamic
+string json = @"{
+    ""name"": ""Alice"",
+    ""age"": 30,
+    ""address"": {
+        ""city"": ""Seattle""
+    }
+}";
+
+dynamic obj = JsonSerializer.Deserialize<ExpandoObject>(json);
+Console.WriteLine(obj.name); // Alice
+Console.WriteLine(obj.address.city); // Seattle
+
+// Handle missing properties safely
+try
+{
+    Console.WriteLine(obj.missing);
+}
+catch (RuntimeBinderException)
+{
+    Console.WriteLine("Property does not exist");
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Cache MethodInfo, PropertyInfo, and compiled delegates — reflection metadata lookup is expensive
+    - Use Expression trees to generate fast compiled accessors for hot reflection paths
+    - Use [CallerMemberName] to get method name at compile time without reflection
+    - Use dynamic for COM interop and scripting host scenarios where it dramatically simplifies code
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Call MethodInfo.Invoke() in a tight loop — benchmark shows 100-500ns vs 1ns for direct calls
+    - Load assemblies dynamically in request-handling code — do it at startup
+    - Use reflection to access private members of third-party types — it breaks on version updates
+    - Use dynamic across an entire codebase as a substitute for proper typing
+  </Card>
+</CardGroup>
+
+## Advanced Reflection Scenarios
+
+<Accordion title="Generic Type Reflection">
+```csharp
+// Working with generic types via reflection
+var listType = typeof(List<>); // Open generic type
+var closedType = listType.MakeGenericType(typeof(int)); // List<int>
+var list = Activator.CreateInstance(closedType); // new List<int>()
+
+// Add items via reflection
+var addMethod = closedType.GetMethod("Add");
+addMethod.Invoke(list, new object[] { 42 });
+addMethod.Invoke(list, new object[] { 123 });
+
+// Get count
+var countProp = closedType.GetProperty("Count");
+int count = (int)countProp.GetValue(list)!; // 2
+```
+</Accordion>
+
+<Accordion title="Assembly Scanning Pattern">
+```csharp
+// Discover all types implementing an interface
+public static IEnumerable<Type> FindImplementations<TInterface>()
+{
+    var interfaceType = typeof(TInterface);
+    var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+    
+    return assemblies
+        .SelectMany(a => a.GetTypes())
+        .Where(t => t.IsClass && !t.IsAbstract)
+        .Where(t => interfaceType.IsAssignableFrom(t));
+}
+
+// Usage: find all IValidator implementations
+var validators = FindImplementations<IValidator>()
+    .Select(t => (IValidator)Activator.CreateInstance(t)!)
+    .ToList();
+```
+</Accordion>
+
+<Accordion title="Attribute-Driven Registration">
+```csharp
+// Auto-register services based on attribute
+[AttributeUsage(AttributeTargets.Class)]
+public class ServiceAttribute : Attribute
+{
+    public ServiceLifetime Lifetime { get; set; } = ServiceLifetime.Transient;
+}
+
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddAttributedServices(
+        this IServiceCollection services, 
+        Assembly assembly)
+    {
+        var types = assembly.GetTypes()
+            .Where(t => t.GetCustomAttribute<ServiceAttribute>() != null);
+        
+        foreach (var type in types)
+        {
+            var attr = type.GetCustomAttribute<ServiceAttribute>()!;
+            var interfaces = type.GetInterfaces();
+            
+            foreach (var iface in interfaces)
+            {
+                services.Add(new ServiceDescriptor(
+                    iface, type, attr.Lifetime));
+            }
+        }
+        
+        return services;
+    }
+}
+```
+</Accordion>

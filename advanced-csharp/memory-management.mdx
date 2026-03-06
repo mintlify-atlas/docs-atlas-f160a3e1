@@ -1,0 +1,317 @@
+---
+title: 'Advanced Memory Management'
+description: 'Deep dive into .NET memory management including stack vs heap allocation, garbage collection generations, IDisposable pattern, and high-performance types like Span\<T\> and Memory\<T\>.'
+---
+
+## Overview
+
+Understanding memory management in .NET is crucial for building high-performance applications. This guide covers the fundamentals of memory allocation, garbage collection, and modern zero-allocation techniques.
+
+## Stack vs Heap
+
+The stack stores value types and method frames — allocated and deallocated deterministically in LIFO order. The heap stores reference types managed by the garbage collector.
+
+<Note>
+Stack allocation is essentially free — the stack pointer moves; no GC involvement. Heap allocation requires finding a free memory block, updating GC bookkeeping, and eventual collection.
+</Note>
+
+### Key Differences
+
+| Aspect | Stack | Heap |
+|--------|-------|------|
+| **Allocation** | Deterministic, LIFO | GC-managed |
+| **Performance** | Fast (pointer move) | Slower (GC overhead) |
+| **Types** | Value types (int, struct, bool) | Reference types (classes) |
+| **Lifetime** | Scoped to method | Until GC collects |
+| **Size** | ~1MB per thread | Limited by system memory |
+
+### Memory Allocation Patterns
+
+- **Stack**: value types (int, struct, bool), method arguments, local variables
+- **Heap**: reference types (class instances), boxed value types, arrays
+- **Boxing**: value type copied to heap-allocated object — triggers GC pressure
+- Stack size: typically 1MB per thread; stack overflow = uncatchable exception
+- **ref struct** (e.g. Span\<T\>): guaranteed stack-only — cannot escape to heap
+- **stackalloc**: allocates array on stack — fast, no GC, use with Span\<T\>
+
+### Code Examples
+
+```csharp
+// Stack allocation — no GC cost
+int x = 42; // value on stack
+Span\<byte\> buf = stackalloc byte[256]; // stack array
+
+// Heap allocation — GC tracked
+var list = new List\<int\>(); // object on heap
+
+// Boxing — hidden heap allocation
+object boxed = x;         // int COPIED to heap
+int unboxed = (int)boxed; // copied back to stack
+
+// Avoid boxing in hot paths — use generics instead
+void Bad(object o) { }
+void Good\<T\>(T v) { }  // no box for value types
+```
+
+<Warning>
+Boxing is the most common hidden heap allocation — it occurs whenever a value type is cast to object or an interface. Use generics instead of object parameters to eliminate boxing in hot paths.
+</Warning>
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Use struct for small, immutable, frequently-copied data without identity
+    - Use stackalloc + Span&lt;T&gt; for temporary byte buffers in hot paths
+    - Use generics instead of object to prevent boxing in collections and APIs
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Use struct for types larger than 16 bytes that are frequently copied
+    - Ignore boxing in tight loops — it generates GC pressure that causes pauses
+    - Use stackalloc for large allocations — risk stack overflow
+  </Card>
+</CardGroup>
+
+## Garbage Collection & Generations
+
+The .NET GC uses generational collection based on the hypothesis that most objects die young. Three short-lived generations (0,1,2) and the Large Object Heap each have different collection frequencies.
+
+### Generation Overview
+
+<Tabs>
+  <Tab title="Gen0">
+    **Generation 0** is the youngest generation, collected most frequently (milliseconds). Most short-lived objects die here.
+    
+    - Size: ~256KB
+    - Collection frequency: Many times per second in high-throughput apps
+    - Objects: Request handlers, DTOs, temporary buffers
+  </Tab>
+  <Tab title="Gen1">
+    **Generation 1** acts as a buffer between Gen0 and full GC.
+    
+    - Collection frequency: ~10× less than Gen0
+    - Objects: Those that survived Gen0 collection
+    - Purpose: Filter short-lived from long-lived objects
+  </Tab>
+  <Tab title="Gen2">
+    **Generation 2** is full GC — expensive, stop-the-world (background GC reduces pause in .NET 5+).
+    
+    - Collection frequency: Rare, triggered by memory pressure
+    - Objects: Long-lived caches, singletons, static data
+    - Impact: Pauses application execution
+  </Tab>
+  <Tab title="LOH">
+    **Large Object Heap** holds objects ≥85,000 bytes — no compaction by default.
+    
+    - Threshold: Objects ≥ 85KB go directly to LOH
+    - Collection: Only during Gen2 GC
+    - Fragmentation: Repeated alloc/free of different-sized objects fragments it
+  </Tab>
+</Tabs>
+
+### Generation Lifecycle
+
+```csharp
+// Object lifetime visualized
+// Most objects: born Gen0, die Gen0 ✓
+var dto = new RequestDto(request); // Gen0, dies after handler
+
+// Long-lived objects: survive to Gen2 (expensive)
+private static readonly Cache _cache = new(); // → Gen2
+
+// LOH object (≥ 85KB) — avoid frequent alloc/free
+var bigBuf = new byte[1024 * 1024]; // → LOH directly
+
+// Prefer renting from pool to avoid LOH pressure
+var buf = ArrayPool\<byte\>.Shared.Rent(1024 * 1024);
+try { /* use buf */ }
+finally { ArrayPool\<byte\>.Shared.Return(buf); }
+```
+
+<Tip>
+Pool large buffers with `ArrayPool\<T\>.Shared` instead of allocating new large arrays — this prevents LOH fragmentation and eliminates the Gen2 GC pressure caused by frequent large object allocation.
+</Tip>
+
+### Key Considerations
+
+- Gen0: ~256KB; collected many times per second in high-throughput apps
+- Gen1: buffer between Gen0 and full GC — typically collected 10× less than Gen0
+- Gen2: full GC — expensive, stop-the-world (background GC reduces pause in .NET 5+)
+- LOH (Large Object Heap): objects ≥ 85,000 bytes — no compaction by default
+- LOH fragmentation: repeated alloc/free of different-sized large objects fragments it
+- `GC.Collect()`: forces collection — use only in tests or known idle periods, not production hot paths
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Pool large objects (≥85KB) with ArrayPool&lt;T&gt; or MemoryPool&lt;T&gt;
+    - Use `GC.TryStartNoGCRegion()` for latency-critical sections that must avoid pauses
+    - Monitor GC generation counts and promotion rates with dotnet-counters or EventSource
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Call `GC.Collect()` in production hot paths (defeats generational GC hypothesis)
+    - Allocate large byte arrays in loops without pooling (LOH fragmentation)
+    - Ignore Gen2 collection frequency — it is the primary GC latency signal
+  </Card>
+</CardGroup>
+
+## IDisposable & Resource Handling
+
+IDisposable provides deterministic, explicit resource cleanup. The `using` statement guarantees `Dispose()` is called even on exceptions. Weak references allow reference to an object without preventing GC collection.
+
+### The using Statement
+
+The IDisposable pattern provides the only mechanism for deterministic cleanup in .NET. The `using` statement is syntactic sugar for a try/finally that calls `Dispose()`.
+
+<Tabs>
+  <Tab title="using declaration (C# 8+)">
+    ```csharp
+    // using declaration — cleaner scope
+    await using var conn = await pool.GetConnectionAsync();
+    await using var cmd  = conn.CreateCommand();
+    // Both disposed in reverse order at scope end
+    ```
+  </Tab>
+  <Tab title="using statement">
+    ```csharp
+    // Traditional using statement
+    using (var conn = await pool.GetConnectionAsync())
+    using (var cmd = conn.CreateCommand())
+    {
+        // Use resources
+    } // Disposed here in reverse order
+    ```
+  </Tab>
+</Tabs>
+
+### Key Patterns
+
+- **using statement**: compiles to `try { } finally { obj.Dispose(); }`
+- **using declaration** (C# 8+): `using var x = ...;` — disposes at end of enclosing scope
+- **IAsyncDisposable** + **await using**: async cleanup (database connections, streams)
+- **WeakReference\<T\>**: `TryGetTarget()` returns false if GC has collected the object
+- **ConditionalWeakTable\<TKey,TValue\>**: GC-aware dictionary that does not root keys
+- **GC.SuppressFinalize(this)**: removes object from finalization queue — call in Dispose()
+
+### Weak References for Caching
+
+Weak references allow caches to hold references to objects without preventing their collection — the GC can collect weakly-referenced objects at any time.
+
+```csharp
+// WeakReference: cache that does not prevent GC
+var cache = new Dictionary<string, WeakReference<BigObject>>();
+
+bool TryGet(string key, out BigObject? value)
+{
+    if (cache.TryGetValue(key, out var wr))
+        return wr.TryGetTarget(out value);
+    value = null; return false;
+}
+```
+
+<Warning>
+Use `await using` with IAsyncDisposable for anything involving I/O (DB connections, HTTP clients, streams) — synchronous `Dispose()` on async resources can cause deadlocks.
+</Warning>
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Always dispose IDisposable objects with using or await using
+    - Implement IAsyncDisposable for types that own I/O resources
+    - Use WeakReference&lt;T&gt; for caches that should not prevent GC collection
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Access disposed objects — always check _disposed flag and throw ObjectDisposedException
+    - Swallow exceptions thrown during Dispose() — log them
+    - Forget await using for IAsyncDisposable — the async cleanup path will not run
+  </Card>
+</CardGroup>
+
+## Span\<T\> & Memory\<T\>
+
+Span\<T\> is a ref struct representing a contiguous sequence of memory — stack, heap, or native. Memory\<T\> is its heap-compatible counterpart. Both enable slicing without allocation.
+
+<Note>
+Span&lt;T&gt; and Memory&lt;T&gt; enable manipulation of subranges of arrays, strings, and native memory without copying. They are the foundation of high-performance .NET parsing and protocol libraries.
+</Note>
+
+### Key Differences
+
+| Feature | Span\<T\> | Memory\<T\> |
+|---------|---------|----------|
+| **Storage** | Stack only (ref struct) | Heap-compatible |
+| **Async** | Cannot cross await | Can cross await |
+| **Fields** | Cannot be in class fields | Can be stored in fields |
+| **Performance** | Slightly faster | Minimal overhead |
+| **Use case** | Synchronous parsing | Async I/O pipelines |
+
+### Characteristics
+
+- **Span\<T\>**: ref struct — stack only, no heap escape, no async use
+- **Memory\<T\>**: heap-compatible — can be stored in fields, used across await
+- **ReadOnlySpan\<string\>**: parse substrings without String.Substring allocation
+- **MemoryMarshal**: reinterpret Span\<byte\> as Span\<int\> or custom struct — zero copy
+- **ArrayPool\<T\>**: rent/return large arrays and wrap in Span/Memory for parsing
+- **System.IO.Pipelines**: high-performance async I/O built on Memory\<byte\>
+
+### Zero-Allocation Parsing
+
+```csharp
+// Parse CSV line without allocation
+static void ParseLine(ReadOnlySpan<char> line)
+{
+    while (!line.IsEmpty)
+    {
+        int comma = line.IndexOf(',');
+        ReadOnlySpan<char> field = comma >= 0
+            ? line[..comma]
+            : line;
+        ProcessField(field); // no allocation
+        if (comma < 0) break;
+        line = line[(comma + 1)..];
+    }
+}
+// Span slices share memory — no copy, no GC
+```
+
+<Tip>
+Replace `string.Substring()` with `ReadOnlySpan<char>` slicing in parsing hot paths — Substring always allocates; Span slicing is free.
+</Tip>
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Use ReadOnlySpan&lt;char&gt; for string parsing to eliminate Substring allocations
+    - Use Memory&lt;T&gt; when you need to store a slice across an async boundary
+    - Benchmark with BenchmarkDotNet to measure the allocation reduction
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Use Span&lt;T&gt; across await boundaries — it is a ref struct and cannot survive heap promotion
+    - Slice beyond the original buffer bounds — it will throw at runtime
+    - Return a Span&lt;T&gt; that points to a stackalloc buffer — the stack frame will be gone
+  </Card>
+</CardGroup>
+
+### Performance Comparison
+
+<Accordion title="Substring vs Span Slicing Benchmark">
+```csharp
+// Traditional approach — allocates every substring
+string input = "field1,field2,field3";
+string[] fields = input.Split(','); // Allocates array + 3 strings
+
+// Span approach — zero allocations
+ReadOnlySpan<char> span = input.AsSpan();
+while (!span.IsEmpty) {
+    int comma = span.IndexOf(',');
+    ReadOnlySpan<char> field = comma >= 0 ? span[..comma] : span;
+    // Process field with no allocation
+    span = comma >= 0 ? span[(comma + 1)..] : ReadOnlySpan<char>.Empty;
+}
+```
+
+Benchmark results show **10-100× fewer allocations** and **2-5× faster execution** for parsing workloads.
+</Accordion>

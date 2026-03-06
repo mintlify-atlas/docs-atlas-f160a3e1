@@ -1,0 +1,373 @@
+---
+title: Azure Cloud Integration
+description: Master API Management, Service Bus, Event Grid, and Event Hubs for the AZ-204 exam
+---
+
+# Azure Cloud Integration
+
+Cloud integration involves connecting applications and services through APIs, messaging, and events. The AZ-204 exam focuses on **API Management**, **Service Bus**, **Event Grid**, and **Event Hubs**.
+
+## API Management
+
+Azure API Management (APIM) is a gateway that publishes, secures, transforms, and monitors APIs.
+
+### Products and Subscriptions
+
+Products bundle APIs for developer consumption with subscription-based access control.
+
+**Product Types:**
+
+- **Open** - No subscription required, anonymous access
+- **Protected** - Requires subscription key approval
+
+**Subscription Keys:**
+
+- Sent via `Ocp-Apim-Subscription-Key` header or `subscription-key` query parameter
+- **Primary** and **secondary** keys enable zero-downtime rotation
+
+```bash
+# Create product and add API
+az apim product create \
+    --service-name myApim \
+    --resource-group myRG \
+    --product-id starter \
+    --product-name "Starter" \
+    --subscription-required true \
+    --state published
+
+az apim product api add \
+    --product-id starter \
+    --api-id myApi \
+    --service-name myApim \
+    --resource-group myRG
+```
+
+```bash
+# Call API with subscription key
+curl -H "Ocp-Apim-Subscription-Key: {key}" \
+    https://myapim.azure-api.net/api/endpoint
+```
+
+<Tip>
+  **For the exam:** Remember `Ocp-Apim-Subscription-Key` header is how clients authenticate to a product. You can also pass it as query parameter `subscription-key`.
+</Tip>
+
+### Policy Definitions
+
+APIM policies are XML statements executing in the request/response pipeline.
+
+**Pipeline Sections:**
+
+- **inbound** - Process request before backend
+- **backend** - Modify backend request
+- **outbound** - Transform response
+- **on-error** - Handle errors
+
+**Common Policies:**
+
+- `validate-jwt` - Token validation
+- `rate-limit-by-key` - Throttling
+- `cache-lookup` / `cache-store` - Response caching
+- `set-header` - Header manipulation
+- `rewrite-uri` - URL rewriting
+
+```xml
+<!-- Inbound: validate JWT and rate limit -->
+<inbound>
+    <validate-jwt header-name="Authorization">
+        <openid-config url="https://login.microsoftonline.com/.../openid-config"/>
+        <audiences>
+            <audience>api-client-id</audience>
+        </audiences>
+    </validate-jwt>
+    <rate-limit-by-key 
+        calls="100" 
+        renewal-period="60"
+        counter-key="@(context.Subscription.Id)"/>
+</inbound>
+```
+
+<Note>
+  Use `validate-jwt` policy in APIM to offload token validation from your backend API - this reduces auth overhead and centralizes security policy.
+</Note>
+
+### Rate Limiting and Quotas
+
+Throttle API calls to protect backends from overload.
+
+**Policy Types:**
+
+- **rate-limit** - Per-subscription, per-period throttle
+- **rate-limit-by-key** - Flexible key (IP, user, custom)
+- **quota-by-key** - Call or bandwidth quota over longer period
+
+```xml
+<!-- 1000 calls per minute per subscription -->
+<rate-limit-by-key
+    calls="1000"
+    renewal-period="60"
+    counter-key="@(context.Subscription.Id)"
+    increment-condition="@(context.Response.StatusCode == 200)"/>
+
+<!-- 10,000 calls per month quota -->
+<quota-by-key
+    calls="10000"
+    renewal-period="2592000" <!-- 30 days -->
+    counter-key="@(context.Subscription.Id)"/>
+```
+
+<Tip>
+  Combine **rate-limit** (short window, burst protection) with **quota-by-key** (long window, usage limits) for comprehensive throttling.
+</Tip>
+
+### Response Caching
+
+Cache backend responses in the gateway to reduce latency and load.
+
+**Cache Policies:**
+
+- `cache-lookup` - Check cache before calling backend
+- `cache-store` - Store response in cache
+- `vary-by-header` / `vary-by-query-parameter` - Partition cache
+
+```xml
+<!-- Cache GET responses for 300 seconds -->
+<inbound>
+    <cache-lookup vary-by-developer="false"
+        vary-by-developer-groups="false">
+        <vary-by-header>Accept</vary-by-header>
+    </cache-lookup>
+</inbound>
+<outbound>
+    <cache-store duration="300"/>
+</outbound>
+```
+
+## Messaging Services
+
+### Service Bus Queues
+
+Enterprise messaging with reliable delivery and advanced features.
+
+**Key Features:**
+
+- **FIFO** with optional sessions for strict ordering
+- **Peek-lock** - Lease message, delete on explicit Complete()
+- **Dead-letter queue (DLQ)** - Unprocessable or expired messages
+- **Duplicate detection** - Idempotent sends in configurable window
+- **Sessions** - Ordered delivery by session ID
+- **Scheduled delivery** - EnqueuedTimeUtc for future delivery
+
+```csharp
+// Send message
+await using var client = new ServiceBusClient(connStr);
+var sender = client.CreateSender("myQueue");
+await sender.SendMessageAsync(new ServiceBusMessage("Hello"));
+
+// Receive with peek-lock
+var receiver = client.CreateReceiver("myQueue");
+var msg = await receiver.ReceiveMessageAsync();
+// Process message
+await receiver.CompleteMessageAsync(msg);
+// or AbandonMessageAsync to return to queue
+```
+
+<Warning>
+  Use **peek-lock** for exactly-once processing guarantee. Don't delete messages before processing is confirmed - use `CompleteMessageAsync()`.
+</Warning>
+
+### Service Bus Topics
+
+Publish-subscribe messaging with filter-based subscriptions.
+
+**Key Features:**
+
+- **Topic** → multiple subscriptions, each gets a copy
+- **Filters**: SQL filter (expression), correlation filter (exact match), True filter (all)
+- Each subscription supports DLQ, sessions, peek-lock
+- Max **2000 subscriptions** per topic
+
+```csharp
+// Create subscription with SQL filter
+var adminClient = new ServiceBusAdministrationClient(connStr);
+await adminClient.CreateSubscriptionAsync(
+    new CreateSubscriptionOptions("orders-topic", "high-value"),
+    new CreateRuleOptions("HighValue",
+        new SqlRuleFilter("OrderValue > 1000")));
+
+// Publish message with property
+var msg = new ServiceBusMessage("order data");
+msg.ApplicationProperties["OrderValue"] = 1500;
+await sender.SendMessageAsync(msg);
+```
+
+<Tip>
+  Use **correlation filters** instead of SQL filters when possible - they're faster (O(1) vs O(n)) and don't require message body inspection.
+</Tip>
+
+### Dead-Letter Queues
+
+DLQs receive messages that cannot be delivered or processed.
+
+**Auto-DLQ Triggers:**
+
+- **MaxDeliveryCount** exceeded (default 10)
+- **TTL expired** with `enableDeadLetteringOnMessageExpiration=true`
+- Explicit `DeadLetterMessageAsync()` with custom reason
+
+```csharp
+// Receive from dead-letter queue
+var receiver = client.CreateReceiver(
+    "myQueue",
+    new ServiceBusReceiverOptions
+    {
+        SubQueue = SubQueue.DeadLetter
+    });
+var dlqMsg = await receiver.ReceiveMessageAsync();
+Console.WriteLine(dlqMsg.DeadLetterReason);
+
+// Explicitly dead-letter a message
+await receiver.DeadLetterMessageAsync(msg, "ValidationFailed");
+```
+
+<Warning>
+  Set up monitoring alerts on DLQ message count - a growing DLQ indicates processing failures that need investigation.
+</Warning>
+
+### Event Grid
+
+HTTP-based reactive event routing at massive scale.
+
+**Key Features:**
+
+- **Event Grid schema** or **CloudEvents 1.0**
+- Built-in retry with exponential backoff (24 hours)
+- Dead-letter support for undeliverable events
+- Filter by event type or subject
+- **At-least-once delivery** - design handlers to be idempotent
+
+```csharp
+// Publish custom event
+var client = new EventGridPublisherClient(
+    new Uri("https://mytopic.eventgrid.azure.net"),
+    new AzureKeyCredential(topicKey));
+
+await client.SendEventAsync(new EventGridEvent(
+    subject: "/orders/1234",
+    eventType: "OrderPlaced",
+    dataVersion: "1.0",
+    data: new { OrderId = "1234", Amount = 99.99 }));
+```
+
+<Note>
+  Event Grid delivers **at-least-once** - design event handlers to be idempotent. Use event ID deduplication if your handler must process each event exactly once.
+</Note>
+
+### Event Hubs
+
+High-throughput event streaming and ingestion platform.
+
+**Key Features:**
+
+- **Partitions** - 2-32 (basic), more in premium/dedicated
+- **Consumer groups** - Independent read pointers per application
+- **Retention** - 1-7 days (standard), up to 90 days (premium)
+- **Kafka-compatible** - Reuse Kafka producers/consumers
+- **Capture** - Auto-archive to Blob/ADLS in Avro format
+- **Throughput units (TU)** - 1 TU = 1 MB/s in, 2 MB/s out
+
+```csharp
+// Send events
+await using var producer = new EventHubProducerClient(connStr, "myHub");
+using var batch = await producer.CreateBatchAsync();
+batch.TryAdd(new EventData(Encoding.UTF8.GetBytes("telemetry")));
+await producer.SendAsync(batch);
+
+// Process with EventProcessorClient
+var processor = new EventProcessorClient(blobClient,
+    "$Default", connStr, "myHub");
+processor.ProcessEventAsync += HandleEvent;
+await processor.StartAsync();
+```
+
+<Tip>
+  Use `EventProcessorClient` (not deprecated EventProcessorHost) for distributed consumption - it checkpoints to Blob Storage and automatically balances partitions.
+</Tip>
+
+## Service Comparison
+
+<Tabs>
+  <Tab title="When to Use Queues">
+    **Azure Storage Queue:**
+    - Simple FIFO queue
+    - Messages up to 64 KB
+    - Millions of messages
+    - At-least-once delivery
+    
+    **Service Bus Queue:**
+    - Enterprise features
+    - Messages up to 256 KB (1 MB premium)
+    - Exactly-once delivery
+    - Sessions, DLQ, duplicate detection
+  </Tab>
+  
+  <Tab title="When to Use Topics">
+    **Service Bus Topics:**
+    - Pub-sub with filters
+    - Multiple subscribers
+    - Enterprise reliability
+    - Exactly-once per subscription
+  </Tab>
+  
+  <Tab title="When to Use Event Grid">
+    **Event Grid:**
+    - Reactive programming
+    - Azure service events (Blob, Resource Manager)
+    - HTTP webhooks
+    - At-least-once delivery
+    - Not for ordered processing
+  </Tab>
+  
+  <Tab title="When to Use Event Hubs">
+    **Event Hubs:**
+    - Telemetry and log streaming
+    - Big data ingestion
+    - Millions of events/sec
+    - Time-series data
+    - Analytics pipelines
+  </Tab>
+</Tabs>
+
+## Integration with Functions
+
+Azure Functions integrates natively with messaging services.
+
+```csharp
+// Service Bus + Event Hub triggers
+[FunctionName("ProcessOrder")]
+public static async Task Run(
+    [ServiceBusTrigger("orders", Connection = "SbConn")]
+    ServiceBusReceivedMessage msg,
+    [EventHub("telemetry", Connection = "EhConn")] 
+    IAsyncCollector<string> telemetry)
+{
+    await telemetry.AddAsync($"Processed: {msg.MessageId}");
+}
+```
+
+<Note>
+  Use `autoCompleteMessages=false` setting on Service Bus triggers when you need manual control over message completion/abandonment.
+</Note>
+
+## Exam Checklist
+
+- [ ] Understand APIM products and subscription keys
+- [ ] Know policy pipeline sections and common policies
+- [ ] Understand rate limiting and quota policies
+- [ ] Know response caching patterns
+- [ ] Understand Service Bus queues vs topics
+- [ ] Know dead-letter queue triggers and monitoring
+- [ ] Understand duplicate detection requirements
+- [ ] Know Event Grid vs Event Hubs use cases
+- [ ] Understand at-least-once delivery patterns
+- [ ] Know Function triggers for messaging services

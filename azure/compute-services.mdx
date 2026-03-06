@@ -1,0 +1,324 @@
+---
+title: Azure Compute Services
+description: Deep dive into Azure App Service, Azure Functions, and container solutions for the AZ-204 exam
+---
+
+# Azure Compute Services
+
+Azure provides multiple compute options for running applications. For the AZ-204 exam, focus on **App Service**, **Azure Functions**, and **containerization**.
+
+## Azure App Service
+
+App Service is Azure's fully managed platform for building, deploying, and scaling web apps and APIs.
+
+### Service Plans
+
+App Service Plans define the region, compute resources, and pricing tier for your applications.
+
+<Note>
+  Every App Service app runs in an App Service Plan which determines CPU, memory, autoscaling, and feature availability.
+</Note>
+
+**Pricing Tiers:**
+
+- **Free/Shared** - No SLA, shared infrastructure, limited features
+- **Basic** - Dedicated VMs, custom domains, manual scale
+- **Standard** - Autoscale, staging slots, daily backups
+- **Premium** - Enhanced performance, VNet integration, more slots
+- **Isolated** - App Service Environment (ASE), private network
+
+```bash
+# Create App Service Plan
+az appservice plan create \
+    --name myAppPlan \
+    --resource-group myRG \
+    --sku S1 \
+    --is-linux
+
+# Scale up the plan tier
+az appservice plan update \
+    --name myAppPlan \
+    --resource-group myRG \
+    --sku P1V3
+```
+
+<Tip>
+  **For the exam:** Standard is the minimum tier for deployment slots, VNet integration requires Premium v2/v3, and Isolated runs in an App Service Environment (ASE).
+</Tip>
+
+### Deployment Slots
+
+Deployment slots are live app instances with their own URLs, enabling zero-downtime deployments.
+
+**Key Features:**
+
+- Standard tier provides **5 slots**, Premium provides up to **20 slots**
+- Atomic swap with zero downtime
+- Slot-specific settings stay with their slot ("sticky")
+- Auto-swap for continuous deployment
+- Traffic percentage routing for A/B testing
+
+```bash
+# Create staging slot
+az webapp deployment slot create \
+    --name myApp \
+    --resource-group myRG \
+    --slot staging
+
+# Deploy to staging
+az webapp deployment source config-zip \
+    --slot staging \
+    --src package.zip \
+    --name myApp \
+    --resource-group myRG
+
+# Swap staging to production
+az webapp deployment slot swap \
+    --name myApp \
+    --resource-group myRG \
+    --slot staging \
+    --target-slot production
+```
+
+<Warning>
+  Mark environment-specific settings as "deployment slot settings" (sticky) so they don't swap with the app - staging points to staging DB, production to production DB.
+</Warning>
+
+### Configuration Settings
+
+App settings and connection strings are injected as environment variables at runtime.
+
+**Key Concepts:**
+
+- Stored encrypted, exposed as environment variables
+- Connection strings prefixed by type (SQLCONNSTR_, MYSQLCONNSTR_)
+- **Key Vault references**: `@Microsoft.KeyVault(SecretUri=...)`
+- Slot-sticky settings don't swap with deployment
+
+```bash
+# Set app setting
+az webapp config appsettings set \
+    --name myApp \
+    --resource-group myRG \
+    --settings MY_SETTING="value"
+
+# Key Vault reference (requires managed identity)
+az webapp config appsettings set \
+    --name myApp \
+    --resource-group myRG \
+    --settings APP_SECRET="@Microsoft.KeyVault(SecretUri=https://vault.vault.azure.net/secrets/mySecret/)"
+```
+
+```csharp
+// Access in .NET
+var val = Environment.GetEnvironmentVariable("MY_SETTING");
+
+// Or via IConfiguration
+var setting = _configuration["MY_SETTING"];
+```
+
+### Scaling Rules
+
+App Service supports manual scale-out and autoscale based on metrics.
+
+**Scaling Types:**
+
+- **Scale-up** - Change pricing tier (more CPU/RAM per instance)
+- **Scale-out** - Add more instances (horizontal scaling)
+- **Autoscale** - Rules-based dynamic scaling (Standard tier+)
+
+```bash
+# Create autoscale setting
+az monitor autoscale create \
+    --resource-group myRG \
+    --resource myAppPlanId \
+    --min-count 2 \
+    --max-count 10 \
+    --count 2
+
+# Add scale-out rule: CPU > 70%
+az monitor autoscale rule create \
+    --resource-group myRG \
+    --autoscale-name myScaleSetting \
+    --condition "Percentage CPU > 70 avg 5m" \
+    --scale out 1
+```
+
+<Tip>
+  Always pair a scale-out rule with a scale-in rule, and set minimum instances ≥ 2 for production to ensure availability during scale-in.
+</Tip>
+
+## Azure Functions
+
+Azure Functions is a serverless compute service that runs event-driven code without managing infrastructure.
+
+### Triggers
+
+Triggers define what causes a Function to execute. Each function has exactly one trigger.
+
+**Common Triggers:**
+
+- **HTTP** - Responds to REST requests
+- **Timer** - Runs on CRON schedule
+- **Blob** - Fires on blob create/update
+- **Queue** - Processes Storage Queue messages
+- **Service Bus** - Processes Service Bus messages
+- **Event Hub** - Processes event streams
+- **Cosmos DB** - Responds to change feed
+
+```csharp
+// HTTP Trigger
+[FunctionName("MyFunc")]
+public static async Task<IActionResult> Run(
+    [HttpTrigger(AuthorizationLevel.Function, "get", "post")]
+    HttpRequest req)
+{
+    return new OkObjectResult("Hello!");
+}
+
+// Timer Trigger (every 5 minutes)
+[FunctionName("TimerFunc")]
+public static void Run(
+    [TimerTrigger("0 */5 * * * *")] TimerInfo timer)
+{
+    // Process
+}
+```
+
+<Note>
+  Timer trigger uses CRON with 6 fields: **seconds minutes hours day month day-of-week**. HTTP trigger AuthorizationLevel options are Anonymous, Function, Admin, and User.
+</Note>
+
+### Bindings
+
+Bindings declaratively connect Functions to Azure services without boilerplate code.
+
+**Binding Types:**
+
+- **Input bindings** - Read data into the function
+- **Output bindings** - Write data from the function
+- Supports: Blob, Queue, Table, Cosmos, Service Bus, SignalR, HTTP
+
+```csharp
+// Input + Output bindings
+[FunctionName("ProcessOrder")]
+public static async Task Run(
+    [QueueTrigger("orders")] string orderId,
+    [CosmosDB("myDb", "orders", Id = "{orderId}", 
+        ConnectionStringSetting = "CosmosConnection")] Order order, // input
+    [Blob("receipts/{orderId}.pdf", FileAccess.Write)] Stream receipt) // output
+{
+    // Generate PDF receipt and write to blob stream
+}
+```
+
+### Durable Functions
+
+Durable Functions extends Azure Functions with stateful, long-running workflows.
+
+**Function Types:**
+
+- **Orchestrator** - Workflow coordinator (must be deterministic)
+- **Activity** - Actual work units
+- **Entity** - Durable actor with state
+- **Client** - Starts/queries orchestrations
+
+```csharp
+// Orchestrator
+[FunctionName("OrderOrchestrator")]
+public static async Task RunOrchestrator(
+    [OrchestrationTrigger] IDurableOrchestrationContext ctx)
+{
+    var order = ctx.GetInput<Order>();
+    await ctx.CallActivityAsync("ValidatePayment", order);
+    await ctx.CallActivityAsync("ShipOrder", order);
+    await ctx.CallActivityAsync("SendConfirmation", order);
+}
+
+// Activity
+[FunctionName("ValidatePayment")]
+public static async Task ValidatePayment(
+    [ActivityTrigger] Order order)
+{
+    // Validate payment
+}
+```
+
+<Warning>
+  Orchestrators must be **deterministic** - never use `DateTime.Now`, random numbers, or direct I/O. Use `ctx.CurrentUtcDateTime` and activities for non-deterministic work.
+</Warning>
+
+### Hosting Plans
+
+Azure Functions offers three hosting plans with different characteristics.
+
+<Tabs>
+  <Tab title="Consumption Plan">
+    - **Scale to zero** when idle
+    - Pay per execution and GB-second
+    - **5-minute timeout** (default), max 10 minutes
+    - **Cold starts** on first request
+    - Best for unpredictable, low-volume workloads
+  </Tab>
+  
+  <Tab title="Premium Plan">
+    - **Pre-warmed instances** (no cold start)
+    - VNet integration
+    - Unlimited execution duration (default 30 min)
+    - Higher compute resources
+    - Minimum 1 always-warm instance
+    - Best for VNet requirements or consistent performance
+  </Tab>
+  
+  <Tab title="Dedicated Plan">
+    - Runs on existing **App Service Plan**
+    - Always warm, no additional cost if plan already exists
+    - Predictable billing
+    - Full App Service features
+    - Best for existing App Service investments
+  </Tab>
+</Tabs>
+
+```bash
+# Create Function App on Consumption plan
+az functionapp create \
+    --consumption-plan-location westus \
+    --name myFuncApp \
+    --resource-group myRG \
+    --runtime dotnet \
+    --storage-account myStorage
+
+# Create on Premium plan (EP1)
+az functionapp plan create \
+    --sku EP1 \
+    --name myPremiumPlan \
+    --resource-group myRG
+```
+
+## Deployment Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Run-from-Package" icon="box">
+    Use `WEBSITE_RUN_FROM_PACKAGE=1` for faster cold starts and read-only filesystem
+  </Card>
+  <Card title="Deployment Slots" icon="layer-group">
+    Use slots for zero-downtime deployments and testing in production-like environment
+  </Card>
+  <Card title="Managed Identity" icon="id-card">
+    Use managed identity for accessing Azure resources without credentials
+  </Card>
+  <Card title="Key Vault References" icon="key">
+    Store secrets in Key Vault and reference them in app settings
+  </Card>
+</CardGroup>
+
+## Exam Checklist
+
+- [ ] Understand App Service Plan tiers and feature availability
+- [ ] Know how to configure deployment slots and swap settings
+- [ ] Understand slot-sticky settings and when to use them
+- [ ] Know the different Function triggers and when to use each
+- [ ] Understand Function bindings for input and output
+- [ ] Know Durable Functions patterns and deterministic requirements
+- [ ] Understand hosting plan differences and when to use each
+- [ ] Know how to deploy Functions with run-from-package

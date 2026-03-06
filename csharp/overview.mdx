@@ -1,0 +1,247 @@
+---
+title: C# Overview
+description: Introduction to C# programming language fundamentals and core concepts
+---
+
+# C# Overview
+
+C# is a modern, object-oriented programming language developed by Microsoft as part of the .NET ecosystem. It combines the power of C++ with the simplicity of Visual Basic, offering developers a robust, type-safe language for building a wide range of applications.
+
+## What is C#?
+
+C# (pronounced "C Sharp") is a statically-typed, compiled language that runs on the .NET runtime. It's designed for building enterprise applications, web services, games, mobile apps, and more.
+
+<Note>
+C# is continuously evolving with new features added regularly. As of 2026, C# 12 and beyond include advanced features like primary constructors, collection expressions, and enhanced pattern matching.
+</Note>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Type Safety" icon="shield">
+    Strong typing catches errors at compile time, reducing runtime bugs and improving code reliability.
+  </Card>
+  
+  <Card title="Object-Oriented" icon="cube">
+    Full support for classes, inheritance, interfaces, and polymorphism enables clean, maintainable code architecture.
+  </Card>
+  
+  <Card title="Memory Management" icon="memory">
+    Automatic garbage collection handles memory allocation and cleanup, freeing developers from manual memory management.
+  </Card>
+  
+  <Card title="Modern Syntax" icon="code">
+    LINQ, async/await, pattern matching, and other modern features make C# expressive and productive.
+  </Card>
+</CardGroup>
+
+## C# Language Fundamentals
+
+### Compilation and Execution
+
+C# code follows a two-step execution process:
+
+1. **Compilation**: C# source code (.cs files) is compiled into Intermediate Language (IL) bytecode
+2. **Runtime**: The .NET Common Language Runtime (CLR) uses Just-In-Time (JIT) compilation to convert IL to native machine code
+
+```csharp
+// Your C# code
+public class HelloWorld
+{
+    public static void Main(string[] args)
+    {
+        Console.WriteLine("Hello, World!");
+    }
+}
+```
+
+<Tip>
+The JIT compiler optimizes code at runtime based on the actual execution environment, potentially resulting in better performance than ahead-of-time compilation.
+</Tip>
+
+## Basic Program Structure
+
+Every C# program has a well-defined structure:
+
+```csharp
+using System;  // Namespace imports at the top
+
+namespace MyApplication  // Namespace groups related classes
+{
+    public class Program  // Classes contain methods and data
+    {
+        // Entry point of the application
+        public static void Main(string[] args)
+        {
+            Console.WriteLine("Welcome to C#");
+        }
+    }
+}
+```
+
+### Top-Level Statements (C# 9+)
+
+Modern C# allows simplified program structure:
+
+```csharp
+// No class or Main method needed
+using System;
+
+Console.WriteLine("Hello, World!");
+var name = Console.ReadLine();
+Console.WriteLine($"Hello, {name}!");
+```
+
+## Type System Overview
+
+C# has two fundamental type categories:
+
+### Value Types
+
+Value types store data directly on the stack (in most cases). They include:
+
+- **Numeric types**: `int`, `long`, `float`, `double`, `decimal`
+- **Boolean**: `bool`
+- **Character**: `char`
+- **Structures**: `struct` custom types
+- **Enumerations**: `enum` types
+
+### Reference Types
+
+Reference types store a reference to data on the heap:
+
+- **Classes**: Custom `class` definitions
+- **Strings**: `string` (immutable reference type)
+- **Arrays**: `int[]`, `string[]`, etc.
+- **Delegates**: Method references
+- **Interfaces**: Contract definitions
+
+<Warning>
+Understanding the difference between value and reference types is crucial for predicting behavior with assignment, parameter passing, and performance optimization.
+</Warning>
+
+## Memory Management
+
+C# uses automatic memory management through garbage collection:
+
+```csharp
+public void ProcessData()
+{
+    var data = new byte[1024];  // Allocated on heap
+    // Use data...
+    // No need to manually free - GC handles it
+}
+```
+
+### Stack vs Heap
+
+| **Stack** | **Heap** |
+|-----------|----------|
+| Fast allocation | Slower allocation |
+| Value types (usually) | Reference types |
+| LIFO (Last In, First Out) | Managed by garbage collector |
+| Per-thread memory | Shared across threads |
+| Limited size (~1 MB default) | Large pool |
+
+<Tip>
+Use `stackalloc` with `Span<T>` for small temporary buffers to avoid heap allocation and GC pressure:
+
+```csharp
+Span<int> buffer = stackalloc int[128];
+buffer[0] = 42;  // Fast, zero GC overhead
+```
+</Tip>
+
+## Common Programming Patterns
+
+### Object Initialization
+
+```csharp
+// Constructor-based
+var person = new Person("Alice", 30);
+
+// Object initializer syntax
+var person = new Person
+{
+    Name = "Alice",
+    Age = 30
+};
+
+// Target-typed new (C# 9+)
+Person person = new("Alice", 30);
+```
+
+### LINQ (Language Integrated Query)
+
+LINQ enables querying collections with SQL-like syntax:
+
+```csharp
+var numbers = new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+
+// Query syntax
+var evenNumbers = from n in numbers
+                  where n % 2 == 0
+                  select n;
+
+// Method syntax
+var evenNumbers = numbers.Where(n => n % 2 == 0);
+```
+
+### Async/Await
+
+Asynchronous programming made simple:
+
+```csharp
+public async Task<string> FetchDataAsync(string url)
+{
+    using var client = new HttpClient();
+    var response = await client.GetStringAsync(url);
+    return response;
+}
+```
+
+## Getting Started
+
+To begin writing C# code, you'll need:
+
+1. **.NET SDK**: Download from [dotnet.microsoft.com](https://dotnet.microsoft.com)
+2. **Code Editor**: Visual Studio, Visual Studio Code, or JetBrains Rider
+3. **Create a project**: `dotnet new console -n MyApp`
+4. **Run your code**: `dotnet run`
+
+```bash
+# Create a new console application
+dotnet new console -n HelloWorld
+cd HelloWorld
+
+# Run the application
+dotnet run
+```
+
+## Next Steps
+
+Now that you understand C# basics, explore these topics:
+
+<CardGroup cols={2}>
+  <Card title="Syntax Basics" href="/csharp/syntax-basics">
+    Learn about variables, operators, and expressions
+  </Card>
+  
+  <Card title="Data Types" href="/csharp/data-types">
+    Deep dive into C#'s type system
+  </Card>
+  
+  <Card title="Control Flow" href="/csharp/control-flow">
+    Master conditional statements and loops
+  </Card>
+  
+  <Card title="Methods & Functions" href="/csharp/methods-functions">
+    Understand how to create and use methods
+  </Card>
+</CardGroup>
+
+## Additional Resources
+
+- [Official C# Documentation](https://docs.microsoft.com/dotnet/csharp/)
+- [.NET Runtime Source Code](https://github.com/dotnet/runtime)
+- [C# Language Specification](https://docs.microsoft.com/dotnet/csharp/language-reference/)

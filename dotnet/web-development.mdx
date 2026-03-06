@@ -1,0 +1,317 @@
+---
+title: Web Development with ASP.NET Core
+description: Building modern web applications and APIs with ASP.NET Core - middleware, controllers, routing, and RESTful principles
+---
+
+ASP.NET Core is a cross-platform, high-performance framework for building modern web applications and APIs. It provides middleware pipelines, MVC controllers, Razor Pages, Blazor components, and minimal APIs.
+
+## Page Lifecycle
+
+The ASP.NET Core request pipeline processes requests through ordered middleware. Understanding lifecycle hooks enables proper initialization and cleanup.
+
+```csharp
+app.UseExceptionHandler("/error");
+app.UseHttpsRedirection();
+app.UseStaticFiles();
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+```
+
+### Middleware Order
+
+Middleware order in Program.cs determines execution order:
+
+1. **Exception Handler** - Must be first to catch all downstream errors
+2. **HTTPS Redirection** - Redirect HTTP to HTTPS
+3. **Static Files** - Serve static content before routing
+4. **Routing** - Must precede endpoints
+5. **Authentication** - Must precede authorization
+6. **Authorization** - Must precede endpoints
+7. **Endpoints** - MapControllers, MapGet, etc.
+
+<Warning>
+Place exception handler first in the pipeline so it wraps all downstream middleware — placing it after routing misses pipeline-level exceptions.
+</Warning>
+
+### Lifecycle Interfaces
+
+- `IHostedService` handles startup/background tasks
+- Minimal APIs bypass controller overhead
+- `IApplicationLifetime.ApplicationStarted` fires after host startup
+- `ApplicationStopping` allows graceful drain of in-flight requests
+
+## Model Binding
+
+ASP.NET Core model binding maps HTTP request data (route, query, body, headers) to action method parameters.
+
+```csharp
+public record CreateOrderRequest(
+    [Required] string ProductId,
+    [Range(1, 100)] int Quantity
+);
+[HttpPost]
+public IActionResult Create([FromBody] CreateOrderRequest req)
+    => Ok(_service.CreateOrder(req));
+```
+
+### Binding Sources
+
+<Tabs>
+  <Tab title="Attributes">
+    - `[FromBody]` - JSON body binding
+    - `[FromRoute]` - Route parameter binding
+    - `[FromQuery]` - Query string binding
+    - `[FromHeader]` - HTTP header binding
+    - `[FromForm]` - Form data binding
+  </Tab>
+  <Tab title="Validation">
+    - `[Required]` - Non-null validation
+    - `[Range]` - Numeric range validation
+    - `[MaxLength]` - String length validation
+    - `[EmailAddress]` - Email format validation
+    - `[RegularExpression]` - Custom pattern validation
+  </Tab>
+</Tabs>
+
+### Key Binding Concepts
+
+- `[ApiController]` attribute enables automatic 400 response on ModelState errors
+- Validation attributes integrate with ModelState
+- Custom model binders implement `IModelBinder`
+- Record types with positional constructors support model binding
+- `[BindNever]` excludes a property from binding
+- `IFormFile` handles multipart file uploads
+
+<Tip>
+Use records with data annotations for request models — immutable, concise, and validation-ready without any extra ceremony.
+</Tip>
+
+## HTTP Methods
+
+HTTP verbs (GET, POST, PUT, PATCH, DELETE) communicate intent in REST APIs. Correct verb usage enables caching, idempotency, and interoperability.
+
+```csharp
+app.MapGet("/orders/{id}", async (int id, IOrderService svc) =>
+    await svc.GetAsync(id) is {} order
+        ? Results.Ok(order) : Results.NotFound());
+app.MapPost("/orders", async (CreateOrderRequest req, IOrderService svc) =>
+    Results.Created($"/orders/{(await svc.CreateAsync(req)).Id}", null));
+```
+
+### HTTP Verb Semantics
+
+<CardGroup cols={2}>
+  <Card title="Safe Methods" icon="shield">
+    **GET** - Retrieve without side effects (idempotent)
+    **HEAD** - Like GET but no body (existence checks)
+  </Card>
+  <Card title="Mutating Methods" icon="pen">
+    **POST** - Create resources (not idempotent)
+    **PUT** - Replace entire resources (idempotent)
+    **PATCH** - Partial updates
+    **DELETE** - Remove resources (idempotent)
+  </Card>
+</CardGroup>
+
+### Status Code Guidelines
+
+- **200 OK** - Successful GET, PUT, PATCH
+- **201 Created** - Successful POST with Location header
+- **204 No Content** - Successful DELETE
+- **400 Bad Request** - Invalid input
+- **401 Unauthorized** - Authentication required
+- **403 Forbidden** - Authenticated but unauthorized
+- **404 Not Found** - Resource doesn't exist
+- **409 Conflict** - Concurrency violation
+
+<Tip>
+Return 201 Created with a Location header for POST endpoints — clients and API gateways use this to discover the new resource URL.
+</Tip>
+
+## RESTful Principles
+
+REST (Representational State Transfer) defines constraints — statelessness, uniform interface, resource addressability — that make APIs scalable and interoperable.
+
+```csharp
+// Resource-oriented URLs
+GET  /api/v1/orders          // list
+GET  /api/v1/orders/42       // single resource
+POST /api/v1/orders          // create
+PUT  /api/v1/orders/42       // full replace
+PATCH /api/v1/orders/42      // partial update
+DELETE /api/v1/orders/42     // remove
+```
+
+### REST Constraints
+
+- **Resources are nouns** - `/orders/{id}`, not `/getOrder`
+- **Statelessness** - Each request carries all context
+- **Uniform interface** - Use HTTP verbs semantically
+- **Resource representations** - Usually JSON
+- **HATEOAS** - Embed links to related/next actions
+- **Content negotiation** - Via Accept header
+
+### API Versioning
+
+<Tabs>
+  <Tab title="URL Path">
+    `/api/v1/orders` — Most common, explicit
+  </Tab>
+  <Tab title="Query String">
+    `/api/orders?version=1` — Flexible but less visible
+  </Tab>
+  <Tab title="Header">
+    `Accept: application/vnd.myapi.v1+json` — Clean URLs, more complex
+  </Tab>
+</Tabs>
+
+<Note>
+Add API versioning from day one — changing a URI structure after consumers integrate is extremely disruptive and usually impossible.
+</Note>
+
+## Routing
+
+ASP.NET Core routing maps incoming URLs to handler endpoints. Route templates define patterns with parameters, constraints, and default values.
+
+```csharp
+app.MapGroup("/api/v1/orders")
+    .MapGet("/{id:int}", GetOrder)
+    .MapPost("", CreateOrder)
+    .RequireAuthorization();
+```
+
+### Route Features
+
+- **Route parameters** - `{name}` syntax; optional with `{name?}`
+- **Constraints** - `{id:int}`, `{slug:alpha}`, `{date:datetime}`
+- **Catch-all** - `{**path}` captures remaining URL segments
+- **Route names** - Enable URL generation via `IUrlHelper`
+- **MapGroup** - Organizes related minimal API routes with shared prefix
+
+<Tip>
+Use MapGroup in minimal APIs to share common prefix, authorization, and filters across related endpoints — cleaner than per-route repetition.
+</Tip>
+
+## Controllers
+
+Controllers in ASP.NET Core MVC and Web API are classes that handle HTTP requests, delegate to services, and return ActionResults.
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class OrdersController : ControllerBase
+{
+    [HttpGet("{id:int}")]
+    public async ActionResult<OrderDto> Get(int id)
+        => await _svc.GetAsync(id) is {} dto ? Ok(dto) : NotFound();
+}
+```
+
+### Controller Guidelines
+
+- **ControllerBase** for APIs; **Controller** adds View() for MVC
+- `[ApiController]` enables automatic 400 on invalid model state
+- `ActionResult<T>` unifies typed returns with status code results
+- `Problem()` returns RFC 7807-compliant error responses
+- Route prefix on controller applies to all actions
+- Filters apply cross-cutting concerns (auth, logging, validation)
+
+<Warning>
+Keep controllers thin — one method per action, no business logic. If a controller action exceeds 10 lines, extract a service.
+</Warning>
+
+## Security (Web)
+
+ASP.NET Core security middleware handles authentication (identity), authorization (permissions), HTTPS enforcement, and CORS policy.
+
+```csharp
+builder.Services.AddAuthorization(o => {
+    o.AddPolicy("AdminOnly", p =>
+        p.RequireRole("Admin")
+         .RequireClaim("department", "IT"));
+});
+[Authorize(Policy = "AdminOnly")] public class AdminController : ControllerBase {}
+```
+
+### Security Layers
+
+<Tabs>
+  <Tab title="Authentication">
+    - **JWT Bearer** - `AddJwtBearer` for API authentication
+    - **Cookie** - `AddCookie` for web apps
+    - **OAuth2/OIDC** - External provider integration
+    - **Certificate** - Mutual TLS authentication
+  </Tab>
+  <Tab title="Authorization">
+    - **Role-based** - `[Authorize(Roles = "Admin")]`
+    - **Policy-based** - `RequireAssertion`, `RequireClaim`
+    - **Resource-based** - `IAuthorizationService` for entity-level checks
+  </Tab>
+  <Tab title="HTTPS & CORS">
+    - **HTTPS** - `UseHttpsRedirection`, `UseHsts`
+    - **CORS** - `AddCors`, `UseCors` with policy
+    - **CSP** - Content Security Policy headers
+  </Tab>
+</Tabs>
+
+<Tip>
+Use policy-based authorization over role-based for non-trivial rules — policies centralize logic and are testable in isolation.
+</Tip>
+
+### Security Best Practices
+
+- Enable HTTPS and HSTS in production
+- Use policy-based authorization for complex rules
+- Validate JWTs with issuer, audience, and lifetime checks
+- Store secrets in Azure Key Vault or environment variables
+- Allow specific CORS origins, never wildcard in production
+
+## Action Filters
+
+Action filters execute code before and after action method execution. They enable cross-cutting concerns like logging, caching, validation, and exception handling.
+
+```csharp
+public class LoggingFilter : IAsyncActionFilter
+{
+    public async Task OnActionExecutionAsync(
+        ActionExecutingContext ctx, ActionExecutionDelegate next)
+    {
+        var sw = Stopwatch.StartNew();
+        await next();
+        _logger.LogInformation("{Action} {Ms}ms", ctx.ActionDescriptor.DisplayName, sw.ElapsedMilliseconds);
+    }
+}
+```
+
+### Filter Types
+
+- **Authorization Filters** - Run first, enforce access control
+- **Resource Filters** - Run before model binding, good for caching
+- **Action Filters** - Run before/after action execution
+- **Result Filters** - Run before/after result execution
+- **Exception Filters** - Handle unhandled exceptions
+
+### Filter Features
+
+- `FilterContext` provides access to route, model state, and result
+- `[ServiceFilter]` and `[TypeFilter]` enable DI inside filters
+- Short-circuiting: set `context.Result` to skip action
+- Global filters: `AddControllers(o => o.Filters.Add(...))`
+
+<Note>
+Use result filters for response transformation (adding headers, wrapping in envelope) rather than doing it in each action method.
+</Note>
+
+<CardGroup cols={3}>
+  <Card title="Logging" icon="file-lines">
+    Track request timing and parameters
+  </Card>
+  <Card title="Caching" icon="database">
+    Short-circuit with cached responses
+  </Card>
+  <Card title="Validation" icon="check">
+    Enforce business rules globally
+  </Card>
+</CardGroup>

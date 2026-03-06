@@ -1,0 +1,341 @@
+---
+title: Testing & Deployment
+description: .NET testing frameworks, deployment strategies, containerization, and configuration management
+---
+
+Proper testing and deployment practices ensure .NET applications are reliable, maintainable, and deployable across environments. This guide covers testing frameworks, deployment strategies, and configuration management.
+
+## Test Frameworks
+
+xUnit, NUnit, and MSTest are the three major .NET test frameworks. xUnit is the recommended framework for new projects.
+
+```csharp
+public class OrderServiceTests
+{
+    [Theory]
+    [InlineData(0,  false)]
+    [InlineData(10, true)]
+    public void IsValid_ReturnsExpected(decimal amount, bool expected)
+        => Assert.Equal(expected, _svc.IsValid(amount));
+}
+```
+
+### Framework Comparison
+
+<Tabs>
+  <Tab title="xUnit">
+    - `[Fact]` for single test
+    - `[Theory]` with `[InlineData]` for parameterized
+    - Each test runs in new class instance (enforces isolation)
+    - Best parallelism support
+  </Tab>
+  <Tab title="NUnit">
+    - `[Test]`, `[TestCase]` for tests
+    - `[SetUp]`, `[TearDown]` per-test
+    - `[OneTimeSetUp]` for fixture setup
+    - Mature, feature-rich
+  </Tab>
+  <Tab title="MSTest">
+    - `[TestMethod]`, `[DataRow]` for tests
+    - `[TestInitialize]` per-test setup
+    - Built-in, Visual Studio integrated
+  </Tab>
+</Tabs>
+
+<Tip>
+Use [Theory] + [MemberData] or [ClassData] for complex test cases — inline data becomes unmanageable for large parameter matrices.
+</Tip>
+
+## Assertions
+
+Assertions verify that actual values match expected outcomes. FluentAssertions provides expressive, readable assertion syntax.
+
+```csharp
+result.Should().NotBeNull()
+     .And.BeOfType<OkObjectResult>()
+     .Which.Value.Should().BeEquivalentTo(
+         new OrderDto { Id = 1, Total = 99.99m });
+```
+
+### Assertion Libraries
+
+- **Assert.Equal(expected, actual)** - Built-in xUnit assertions
+- **FluentAssertions** - `actual.Should().Be(expected)`
+- **Collection assertions** - `Should().HaveCount()`, `Contain()`, `BeEquivalentTo()`
+- **Exception assertions** - `action.Should().Throw<T>()`
+- **Async assertions** - `await act.Should().ThrowAsync<T>()`
+- **BeEquivalentTo** - Compares object graphs recursively
+
+<Note>
+Use BeEquivalentTo for object graph comparison instead of multiple individual property assertions — cleaner and catches new properties automatically.
+</Note>
+
+## Test Driven Development
+
+TDD writes a failing test first, then minimum code to pass, then refactors. It drives design through test specifications.
+
+```csharp
+// Red: write failing test first
+[Fact]
+public void Discount_Applied_When_OrderOver100()
+{
+    var svc = new PricingService();
+    var result = svc.CalculateTotal(120m);
+    result.Should().Be(108m); // 10% discount
+}
+```
+
+### TDD Cycle
+
+1. **Red** - Write a failing test for the next small behavior
+2. **Green** - Write the minimum code to pass
+3. **Refactor** - Clean up while keeping green
+
+### TDD Principles
+
+- Write the test before the implementation code
+- Each test covers one behavior, not one method
+- **BDD** (Behavior-Driven Development) uses Given/When/Then naming
+- **FIRST** principles: Fast, Independent, Repeatable, Self-verifying, Timely
+- **Mutation testing** (Stryker.NET) validates test effectiveness
+- Code coverage is a lower bound — 80% line coverage is a minimum, not goal
+
+<Tip>
+Start with the simplest failing test and write only enough code to make it green — resist the urge to implement more than the test demands.
+</Tip>
+
+## Mocking
+
+Mocking frameworks (NSubstitute, Moq, FakeItEasy) create test doubles that simulate dependency behavior.
+
+```csharp
+var repo = Substitute.For<IOrderRepository>();
+repo.GetAsync(42).Returns(new Order { Id = 42 });
+var svc = new OrderService(repo);
+await svc.ProcessAsync(42);
+await repo.Received(1).SaveAsync(Arg.Any<Order>());
+```
+
+### Mocking Frameworks
+
+<CardGroup cols={3}>
+  <Card title="NSubstitute" icon="cube">
+    Clean syntax, implicit interface matching
+  </Card>
+  <Card title="Moq" icon="box">
+    Popular, mature, Setup/Verify pattern
+  </Card>
+  <Card title="FakeItEasy" icon="shapes">
+    Natural syntax with A.Fake&lt;T&gt;
+  </Card>
+</CardGroup>
+
+### Mocking Best Practices
+
+- **Stubs** - Return values; **Mocks** also verify calls
+- Mock at the boundary (interfaces injected by DI)
+- Verify only meaningful interactions, not every call
+- Use `Arg.Any<T>()` for arguments you don't care about
+- Prefer fakes over mocks for complex stateful collaborators
+
+<Note>
+Prefer NSubstitute over Moq for new projects — its implicit interface matching syntax is cleaner and requires fewer characters per setup.
+</Note>
+
+## Code Coverage
+
+Code coverage measures which lines, branches, and paths are exercised by tests. Coverlet + ReportGenerator are the standard .NET coverage tools.
+
+```bash
+# CI pipeline step
+dotnet test --collect:"XPlat Code Coverage"
+reportgenerator
+  -reports:"**/coverage.cobertura.xml"
+  -targetdir:coverage
+  -reporttypes:Html;Cobertura
+```
+
+### Coverage Metrics
+
+- **Line coverage** - Measures statements executed
+- **Branch coverage** - Measures conditions (more valuable)
+- **Method coverage** - Measures methods called
+- **Path coverage** - Measures execution paths (comprehensive but expensive)
+
+### Coverage Tools
+
+- `dotnet test --collect:"XPlat Code Coverage"`
+- **Coverlet.Collector** - NuGet package for test project
+- **ReportGenerator** - Converts coverage XML to HTML reports
+- **Cobertura XML** - Integrates with Azure DevOps and GitHub Actions
+- `[ExcludeFromCodeCoverage]` - Exclude generated code
+
+<Tip>
+Target 80%+ branch coverage on business logic — branch coverage finds uncovered edge cases that line coverage misses entirely.
+</Tip>
+
+## Containerization
+
+Docker containers package .NET applications with their dependencies for consistent deployment across environments.
+
+```dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet publish -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
+WORKDIR /app
+COPY --from=build /app .
+USER app
+ENTRYPOINT ["dotnet", "MyApp.dll"]
+```
+
+### Docker Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Multi-stage Build" icon="layer-group">
+    Use SDK image to build, ASP.NET runtime image to run (smaller, secure images)
+  </Card>
+  <Card title="Non-root User" icon="user-shield">
+    `USER app` prevents privilege escalation
+  </Card>
+  <Card title="Health Checks" icon="heart-pulse">
+    `HEALTHCHECK CMD curl --fail http://localhost/health`
+  </Card>
+  <Card title=".dockerignore" icon="file-slash">
+    Exclude bin/obj/secrets from build context
+  </Card>
+</CardGroup>
+
+### Container Features
+
+- **Multi-stage builds** - Minimize image size
+- Base images: `mcr.microsoft.com/dotnet/aspnet:<version>`
+- `dotnet publish -p:PublishProfile=DefaultContainer` pushes OCI image directly
+- Pin base image versions in production
+
+<Warning>
+Pin base image versions (e.g. mcr.microsoft.com/dotnet/aspnet:8.0.3) in production Dockerfiles — floating tags cause unpredictable behavior on rebuilds.
+</Warning>
+
+## Azure Deployment
+
+Azure App Service, AKS, Container Apps, and Azure Functions are the primary .NET hosting targets in Azure.
+
+```csharp
+// Key Vault reference in App Service
+// App Setting Value:
+@Microsoft.KeyVault(SecretUri=https://mykv.vault.azure.net/secrets/DbConn/)
+
+// Application Insights SDK registration
+builder.Services.AddApplicationInsightsTelemetry();
+```
+
+### Azure Services
+
+<Tabs>
+  <Tab title="App Service">
+    - PaaS host for web apps and APIs
+    - Deployment slots for zero-downtime
+    - Scale up/out based on SKU
+    - Integrated with App Insights
+  </Tab>
+  <Tab title="AKS">
+    - Full Kubernetes control
+    - Azure CNI networking
+    - Managed control plane
+    - Advanced orchestration
+  </Tab>
+  <Tab title="Container Apps">
+    - Serverless containers
+    - Keda-based autoscaling
+    - Built-in Dapr integration
+    - Simple, cost-effective
+  </Tab>
+</Tabs>
+
+### Azure Best Practices
+
+- **Managed Identity** - Eliminates connection string credentials
+- **Key Vault** - Store secrets, reference from App Settings
+- **Application Insights** - Distributed telemetry and monitoring
+- **Deployment slots** - Blue-green deployments with slot swap
+
+<Tip>
+Enable Managed Identity and Key Vault references from day one — retrofitting away from hardcoded connection strings in production is painful and risky.
+</Tip>
+
+## Web Deploy
+
+Web Deploy (MSDeploy) syncs web application content to IIS and Azure App Service.
+
+```yaml
+# GitHub Actions deployment
+- name: Deploy to Azure
+  uses: azure/webapps-deploy@v2
+  with:
+    app-name: myapp
+    slot-name: staging
+    publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }}
+```
+
+### Deployment Options
+
+- **dotnet publish** output to folder, then msdeploy sync
+- **Azure Zip Deploy** - POST to `https://<app>.scm.azurewebsites.net/api/zipdeploy`
+- **Deployment slots** - Enable blue-green with warm swap
+- **Kudu SCM** - Console for file system access and debugging
+- **GitHub Actions** - `azure/webapps-deploy` action
+
+<Note>
+Always deploy to a staging slot first and use slot swap for production — this enables instant rollback and warms up the new version before it serves traffic.
+</Note>
+
+## Configuration Management
+
+ASP.NET Core configuration is a layered key-value system. Providers include JSON files, environment variables, Azure Key Vault, and user secrets.
+
+```csharp
+builder.Services
+    .AddOptions<SmtpOptions>()
+    .BindConfiguration("Smtp")
+    .ValidateDataAnnotations()
+    .ValidateOnStart(); // fail fast if config is invalid
+```
+
+### Configuration Providers
+
+Provider order (later providers override earlier ones):
+
+1. `appsettings.json`
+2. `appsettings.{env}.json`
+3. Environment variables
+4. User secrets (development)
+5. Command line arguments
+
+### Configuration Features
+
+- **Environment variables** - Use double underscore `__` as hierarchy separator
+- **User Secrets** - `dotnet user-secrets` for local development
+- **IOptionsMonitor&lt;T&gt;** - Reloads config at runtime without restart
+- **ValidateDataAnnotations** - Validates options with data annotations
+- **AddAzureKeyVault** - Integrates Key Vault as configuration provider
+
+<Tip>
+Use ValidateOnStart() for all IOptions registrations — this surfaces missing or invalid configuration at startup rather than at runtime when a request hits the code.
+</Tip>
+
+### Configuration Best Practices
+
+<CardGroup cols={3}>
+  <Card title="ValidateOnStart" icon="check">
+    Fail-fast on missing config
+  </Card>
+  <Card title="IOptionsMonitor" icon="rotate">
+    For settings that change without restarts
+  </Card>
+  <Card title="User Secrets" icon="key">
+    Locally; Key Vault in production
+  </Card>
+</CardGroup>

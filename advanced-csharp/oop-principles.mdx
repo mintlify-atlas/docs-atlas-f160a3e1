@@ -1,0 +1,296 @@
+---
+title: 'Object-Oriented Programming Principles'
+description: 'Master advanced OOP concepts in C# including constructor chaining, finalizers, static constructors, partial classes, sealed and abstract classes, and interface implementation patterns.'
+---
+
+## Overview
+
+Object-oriented programming in C# provides powerful mechanisms for code organization, inheritance control, and resource management. Understanding these advanced OOP principles is essential for building robust, maintainable applications.
+
+## Constructor Chaining
+
+Constructor chaining delegates initialization from one constructor to another using `this()` for same-class chaining or `base()` for parent-class chaining, eliminating duplicate initialization code.
+
+<Note>
+Constructor chaining enforces the DRY principle at object creation time. When a class has multiple constructors, the primary constructor holds all initialization logic — others delegate to it via `this()`.
+</Note>
+
+### Key Points
+
+- `this()` keyword chains to another constructor in the same class
+- `base()` keyword delegates to a parent class constructor
+- Chain runs before the current constructor body executes
+- Order: base → derived → current constructor body
+- Optional parameters are often a cleaner alternative to constructor overloads
+- Record types use primary constructors that auto-generate properties and chaining
+
+### Example
+
+```csharp
+public class Connection
+{
+    public string Host { get; }
+    public int    Port { get; }
+    public bool   UseSsl { get; }
+
+    // Primary constructor — all logic here
+    public Connection(string host, int port, bool ssl)
+        => (Host, Port, UseSsl) = (host, port, ssl);
+
+    // Convenience overloads chain to primary
+    public Connection(string host) : this(host, 443, true) { }
+    public Connection() : this("localhost") { }
+}
+```
+
+<Tip>
+Prefer a single primary constructor with all logic, then express convenience overloads as thin `this()` chains. This makes the class easy to test and ensures validation runs regardless of entry point.
+</Tip>
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Put all initialization logic in the most specific constructor
+    - Chain simpler constructors to the most specific one via `this()`
+    - Use `base()` to pass required values to the parent constructor
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Duplicate initialization code across multiple constructors
+    - Call virtual methods from constructors (virtual dispatch is incomplete at construction time)
+    - Chain in a circle — the compiler detects it but it indicates a design problem
+  </Card>
+</CardGroup>
+
+## Destructors & Finalizers
+
+Finalizers (`~ClassName` syntax) are called by the GC before an object's memory is reclaimed. They provide a safety net for unmanaged resource cleanup but offer no timing guarantees.
+
+<Warning>
+Finalizers are non-deterministic — the GC decides when they run, which may be seconds, minutes, or never (on app exit). Objects with finalizers survive one extra GC cycle, increasing memory pressure.
+</Warning>
+
+### Key Characteristics
+
+- Finalizer syntax: `~ClassName()` — compiles to `protected override void Finalize()`
+- Non-deterministic timing: GC decides when; may be seconds, minutes, or never (app exit)
+- Objects with finalizers are promoted an extra generation — increased memory pressure
+- Finalization queue: GC moves finalizable objects here before calling finalizer
+- After finalizer runs, object is eligible for collection on next GC cycle
+- Always call `GC.SuppressFinalize(this)` in `Dispose()` to remove from finalization queue
+
+### Implementation Pattern
+
+```csharp
+public class NativeBuffer : IDisposable
+{
+    private IntPtr _handle;
+    private bool   _disposed;
+
+    public NativeBuffer() => _handle = NativeMethods.Alloc();
+
+    // Finalizer: safety net ONLY — prefer Dispose()
+    ~NativeBuffer() => Dispose(false);
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this); // remove from queue
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_disposed) return;
+        if (disposing) { /* free managed resources */ }
+        NativeMethods.Free(_handle); // unmanaged always
+        _disposed = true;
+    }
+}
+```
+
+<Tip>
+Only add a finalizer if your class directly holds unmanaged resources (IntPtr, SafeHandle). If you hold managed IDisposable fields, implement IDisposable without a finalizer — the managed fields handle their own cleanup.
+</Tip>
+
+## Static Constructors
+
+Static constructors initialize a class's static state exactly once, before any static member is accessed or any instance is created. They are called by the runtime, not by user code.
+
+### Characteristics
+
+- Implicitly private — no access modifier allowed
+- No parameters — cannot be overloaded
+- Runtime calls it before first use of the type (or app startup with beforeFieldInit)
+- Thread-safe: CLR ensures only one thread executes it
+- beforeFieldInit flag: type without static constructor may initialize earlier
+- Exception in static constructor: TypeInitializationException wraps it; type is permanently broken
+
+### Example: Singleton Pattern
+
+```csharp
+public class ConnectionPool
+{
+    private static readonly Dictionary<string, Pool> _pools;
+    private static readonly ILogger _log;
+
+    // Runs once — before any instance or static member access
+    static ConnectionPool()
+    {
+        _pools = new Dictionary<string, Pool>();
+        _log   = LoggerFactory.Create();
+        _log.Info("Pool subsystem initialized");
+    }
+
+    // Singleton using static constructor guarantee
+    public static readonly ConnectionPool Instance
+        = new ConnectionPool();
+}
+```
+
+<Warning>
+Static constructors can hurt startup performance if they are slow. Prefer lazy initialization (`Lazy<T>`) when the cost is significant and the type is not always needed.
+</Warning>
+
+## Partial & Nested Classes
+
+Partial classes split a single class definition across multiple files. Nested classes are defined inside another class, granting access to private members of the outer class.
+
+### Partial Classes
+
+Partial classes are resolved at compile time — the compiler merges them into one. They are primarily used to separate generated code (EF migrations, WinForms designer) from hand-written logic.
+
+- Partial: all parts must use `partial` keyword, same assembly, same namespace
+- Partial methods: declaration in one file, optional implementation in another — removed if unimplemented
+
+### Nested Classes
+
+Nested classes are full classes that share the outer class's private scope — ideal for implementation details that should not be publicly visible.
+
+- Nested classes can be private — completely hidden from the public API surface
+- Nested classes access outer private members directly — tight coupling by design
+- Use private nested classes for algorithm implementations or state machines
+
+```csharp
+// Partial class: generated + hand-written code
+// MyModel.generated.cs
+public partial class MyModel
+{
+    public string Name { get; set; }
+    partial void OnValidating(); // optional hook
+}
+
+// MyModel.cs — hand-written logic
+public partial class MyModel
+{
+    // Private nested class — hidden from consumers
+    private class ValidationState
+    {
+        public bool IsValid;
+        public List<string> Errors = new();
+    }
+    partial void OnValidating() => Validate();
+}
+```
+
+<Tip>
+Use partial classes to cleanly separate generated code from hand-written code, but avoid using them to split large hand-written classes — if a class needs splitting, it likely violates the Single Responsibility Principle.
+</Tip>
+
+## Sealed & Abstract Classes
+
+Abstract classes define contracts and partial implementations that derived classes must complete. Sealed classes prevent inheritance entirely, enabling JIT devirtualization optimizations.
+
+### Abstract Classes
+
+- `abstract class`: cannot be instantiated; may have abstract (unimplemented) members
+- Abstract members must be overridden in non-abstract derived classes
+- Template Method Pattern: abstract class defines algorithm skeleton; derived classes fill steps
+
+### Sealed Classes
+
+- `sealed class`: cannot be derived from — final in Java terminology
+- `sealed override`: prevents further override of a specific virtual method in derived classes
+- JIT devirtualization: sealed types allow direct call instead of vtable dispatch (~10% faster)
+
+```csharp
+// Abstract class: Template Method Pattern
+public abstract class Exporter
+{
+    // Template method — algorithm skeleton
+    public void Export(IEnumerable<Row> rows)
+    {
+        var header = BuildHeader();
+        var body   = rows.Select(FormatRow);
+        Write(header, body);
+    }
+    protected abstract string BuildHeader();
+    protected abstract string FormatRow(Row r);
+    protected abstract void   Write(string h, IEnumerable<string> b);
+}
+
+// Sealed: no further derivation, JIT optimizes
+public sealed class CsvExporter : Exporter
+{
+    protected override string BuildHeader() => "id,name,value";
+    protected override string FormatRow(Row r) => $"{r.Id},{r.Name},{r.Value}";
+    protected override void Write(string h, IEnumerable<string> b)
+        => File.WriteAllLines("out.csv", b.Prepend(h));
+}
+```
+
+<Tip>
+Seal classes by default unless you explicitly design them for inheritance. Designing for inheritance is hard — unsealed classes are a promise to support any subclass someone might write.
+</Tip>
+
+## Interface Implementation
+
+Explicit interface implementation hides members from the class's public API — accessible only through the interface type. The `base` keyword calls parent class members from a derived class override.
+
+### Explicit vs Implicit Implementation
+
+- **Explicit**: `void IInterface.Method()` — no access modifier, accessed only through interface cast
+- **Implicit**: `public void Method()` — accessible directly on the class
+- Resolves ambiguity when two interfaces define the same method name
+- Default interface members (C# 8+): interface can have a default implementation
+
+### Handling Name Conflicts
+
+```csharp
+interface IReader { string Read(); }
+interface IWriter { string Read(); } // conflict!
+
+public class Stream : IReader, IWriter
+{
+    // Explicit — resolves conflict per interface
+    string IReader.Read() => "reading...";
+    string IWriter.Read() => "writing...";
+}
+
+// Usage: must cast to correct interface
+var s = new Stream();
+string r = ((IReader)s).Read(); // "reading..."
+string w = ((IWriter)s).Read(); // "writing..."
+
+// base: extend parent override
+public override string ToString()
+    => $"[Stream: {base.ToString()}]";
+```
+
+<Tip>
+Use explicit interface implementation to hide "plumbing" interface members (IXmlSerializable, IDbCommand) that are implementation details, not part of your type's core domain API.
+</Tip>
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Use explicit implementation when two interfaces conflict on the same method name
+    - Use explicit implementation to hide infrastructure interfaces from the public API
+    - Call `base.Method()` to extend rather than replace parent behavior in overrides
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Use explicit implementation to "secure" members — it can be bypassed via casting
+    - Skip calling `base.Dispose()` in a non-sealed derived `Dispose()`
+    - Make base a shortcut for deep-chain calls (base.base is not valid)
+  </Card>
+</CardGroup>

@@ -1,0 +1,403 @@
+---
+title: 'Delegates & Events'
+description: 'Master C# delegates and events including multicast delegates, covariance, contravariance, event handling patterns, and thread-safe event invocation.'
+---
+
+## Overview
+
+Delegates and events are fundamental to event-driven programming in C#. Understanding delegate semantics, variance, and proper event patterns is essential for building robust, decoupled systems.
+
+## Delegate Fundamentals
+
+Delegates are type-safe function pointers. Multicast delegates hold invocation lists. Covariance allows return type widening; contravariance allows parameter type widening in delegate assignment.
+
+<Note>
+A delegate in C# is an object that holds a method reference — strongly typed unlike function pointers. Multicast delegates chain multiple methods; invoking the delegate calls all.
+</Note>
+
+### Key Characteristics
+
+- **Delegate** = type-safe, heap-allocated function pointer (class derived from MulticastDelegate)
+- **Multicast**: `+=` chains methods; `-=` removes; invoked sequentially; last return value wins
+- **Action\<T\>**: void return built-in delegate; **Func\<T,TResult\>**: returns TResult
+- **Covariance (out)**: delegate returning Base can hold method returning Derived
+- **Contravariance (in)**: delegate taking Derived can hold method taking Base
+- **Predicate\<T\>**: alias for `Func\<T,bool\>` — used in `List\<T\>.FindAll()` and `Array.FindAll()`
+
+### Variance Examples
+
+```csharp
+// Covariance: return type narrows
+Func<Animal> factory = () => new Dog(); // Dog : Animal ✓
+
+// Contravariance: parameter type widens
+Action<Dog> handler = (Animal a) => Log(a); // widens ✓
+
+// Multicast: all methods invoked
+Action<string> log = Console.WriteLine;
+log += s => File.AppendAllText("log.txt", s);
+log += s => Telemetry.Track(s);
+log("hello"); // 3 methods called in order
+
+// Unsubscribe: -= removes first matching entry
+log -= Console.WriteLine;
+```
+
+<Tip>
+Capture a local copy of a multicast delegate before invoking it to make the invocation thread-safe: `var handler = _event; handler?.Invoke()` — this prevents race conditions if subscribers remove themselves during invocation.
+</Tip>
+
+## Built-in Delegate Types
+
+<Tabs>
+  <Tab title="Action<T>">
+    **Action** delegates represent methods that return void.
+    
+    ```csharp
+    // No parameters
+    Action notify = () => Console.WriteLine("Notification");
+    notify();
+    
+    // With parameters (up to 16)
+    Action<string, int> log = (msg, level) => 
+        Console.WriteLine($"[{level}] {msg}");
+    log("Error occurred", 3);
+    ```
+    
+    Use Action when you need to execute code without returning a value.
+  </Tab>
+  <Tab title="Func<T, TResult>">
+    **Func** delegates represent methods that return a value.
+    
+    ```csharp
+    // No parameters
+    Func<int> getCount = () => 42;
+    int count = getCount();
+    
+    // With parameters (up to 16 input, 1 output)
+    Func<int, int, int> add = (a, b) => a + b;
+    int sum = add(5, 3);
+    
+    // Used in LINQ
+    var evens = numbers.Where(n => n % 2 == 0);
+    ```
+    
+    Use Func when you need to compute and return a value.
+  </Tab>
+  <Tab title="Predicate<T>">
+    **Predicate** delegates test a condition and return bool.
+    
+    ```csharp
+    // Predicate<T> is equivalent to Func<T, bool>
+    Predicate<int> isEven = n => n % 2 == 0;
+    
+    var numbers = new List<int> { 1, 2, 3, 4, 5 };
+    var evenNumbers = numbers.FindAll(isEven);
+    
+    // Same as:
+    Func<int, bool> isEvenFunc = n => n % 2 == 0;
+    var evenFiltered = numbers.Where(isEvenFunc).ToList();
+    ```
+    
+    Use Predicate with collection methods like `FindAll`, `Exists`, `TrueForAll`.
+  </Tab>
+</Tabs>
+
+### Multicast Delegate Behavior
+
+```csharp
+// Multicast return value behavior
+Func<int> multiFunc = () => 1;
+multiFunc += () => 2;
+multiFunc += () => 3;
+
+int result = multiFunc(); // result = 3 (last return value wins)
+
+// Exception handling in multicast
+Action multiAction = () => Console.WriteLine("First");
+multiAction += () => throw new Exception("Second failed");
+multiAction += () => Console.WriteLine("Third"); // Never executes
+
+try
+{
+    multiAction(); // First executes, then exception thrown, Third skipped
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Caught: {ex.Message}");
+}
+```
+
+<Warning>
+When a multicast delegate throws an exception, remaining delegates in the invocation list are not called. For critical scenarios, invoke each delegate manually in a try-catch.
+</Warning>
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Use Func&lt;T,TResult&gt; and Action&lt;T&gt; instead of custom delegate types where possible
+    - Capture delegate locally before null-checking and invoking in multi-threaded code
+    - Use lambda expressions for short, context-local callbacks — no need for named methods
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Assume multicast delegate order is stable for logic that depends on call sequence
+    - Forget to -= when subscribing in a long-lived object — memory leaks via delegate retention
+    - Use custom delegate types when Func/Action/Predicate already match the signature
+  </Card>
+</CardGroup>
+
+## Event Handling
+
+Events are multicast delegate fields with restricted access — only the declaring class can invoke them. Custom event accessors enable thread-safe subscription and custom storage.
+
+<Note>
+The `event` keyword wraps a delegate with restricted access: only the declaring class invokes; subscribers use += and -=. Custom event accessors (add/remove) enable lock-based thread safety, weak event patterns, and custom subscriber storage.
+</Note>
+
+### Standard Event Pattern
+
+```csharp
+// Standard event pattern with EventHandler<TEventArgs>
+public class OrderProcessor
+{
+    // Event declaration
+    public event EventHandler<OrderEventArgs>? OrderPlaced;
+    public event EventHandler<OrderEventArgs>? OrderCancelled;
+    
+    // Protected virtual method to raise event
+    protected virtual void OnOrderPlaced(Order order)
+    {
+        OrderPlaced?.Invoke(this, new OrderEventArgs(order));
+    }
+    
+    protected virtual void OnOrderCancelled(Order order)
+    {
+        OrderCancelled?.Invoke(this, new OrderEventArgs(order));
+    }
+    
+    public void PlaceOrder(Order order)
+    {
+        // Process order
+        OnOrderPlaced(order);
+    }
+}
+
+// EventArgs derived class
+public class OrderEventArgs : EventArgs
+{
+    public Order Order { get; }
+    public DateTime Timestamp { get; }
+    
+    public OrderEventArgs(Order order)
+    {
+        Order = order;
+        Timestamp = DateTime.UtcNow;
+    }
+}
+```
+
+### Thread-Safe Events with Custom Accessors
+
+Custom event accessors enable lock-based thread safety and custom subscriber management.
+
+```csharp
+// Thread-safe event with custom accessors
+private readonly object _lock = new();
+private EventHandler<OrderArgs>? _placed;
+
+public event EventHandler<OrderArgs>? OrderPlaced
+{
+    add    { lock (_lock) _placed += value; }
+    remove { lock (_lock) _placed -= value; }
+}
+
+protected virtual void OnOrderPlaced(Order o)
+{
+    EventHandler<OrderArgs>? handler;
+    lock (_lock) handler = _placed; // snapshot
+    handler?.Invoke(this, new OrderArgs(o));
+}
+```
+
+<Tip>
+Always copy the delegate to a local variable before null-checking and invoking in multi-threaded code — otherwise a subscriber could unsubscribe between your null check and your Invoke() call.
+</Tip>
+
+### Event Subscription Patterns
+
+<Tabs>
+  <Tab title="Basic Subscription">
+    ```csharp
+    var processor = new OrderProcessor();
+    
+    // Subscribe with lambda
+    processor.OrderPlaced += (sender, e) =>
+    {
+        Console.WriteLine($"Order placed: {e.Order.Id}");
+    };
+    
+    // Subscribe with method
+    processor.OrderPlaced += OnOrderPlaced;
+    
+    void OnOrderPlaced(object? sender, OrderEventArgs e)
+    {
+        // Handle event
+    }
+    
+    // Unsubscribe
+    processor.OrderPlaced -= OnOrderPlaced;
+    ```
+  </Tab>
+  <Tab title="Weak Event Pattern">
+    ```csharp
+    // Weak event pattern prevents memory leaks
+    public class WeakEventManager<TEventArgs> where TEventArgs : EventArgs
+    {
+        private readonly List<WeakReference<EventHandler<TEventArgs>>> _handlers = new();
+        
+        public void AddHandler(EventHandler<TEventArgs> handler)
+        {
+            _handlers.Add(new WeakReference<EventHandler<TEventArgs>>(handler));
+        }
+        
+        public void RemoveHandler(EventHandler<TEventArgs> handler)
+        {
+            _handlers.RemoveAll(wr => 
+            {
+                if (!wr.TryGetTarget(out var target)) return true;
+                return target == handler;
+            });
+        }
+        
+        public void Raise(object? sender, TEventArgs args)
+        {
+            _handlers.RemoveAll(wr => !wr.TryGetTarget(out _));
+            
+            foreach (var weakRef in _handlers.ToList())
+            {
+                if (weakRef.TryGetTarget(out var handler))
+                    handler(sender, args);
+            }
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="Async Event Handlers">
+    ```csharp
+    // Async event pattern
+    public class AsyncEventArgs : EventArgs
+    {
+        public Task? CompletionTask { get; set; }
+    }
+    
+    public class Publisher
+    {
+        public event EventHandler<AsyncEventArgs>? DataReceived;
+        
+        protected virtual async Task OnDataReceivedAsync()
+        {
+            var handler = DataReceived;
+            if (handler != null)
+            {
+                var args = new AsyncEventArgs();
+                var tasks = new List<Task>();
+                
+                foreach (EventHandler<AsyncEventArgs> del in handler.GetInvocationList())
+                {
+                    var task = Task.Run(() => del(this, args));
+                    tasks.Add(task);
+                    if (args.CompletionTask != null)
+                        tasks.Add(args.CompletionTask);
+                }
+                
+                await Task.WhenAll(tasks);
+            }
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Key Event Patterns
+
+- **event keyword**: restricts invocation to declaring class; prevents = assignment from outside
+- **Standard pattern**: `public event EventHandler<TEventArgs> SomethingHappened`
+- **Custom accessors**: `add { } remove { }` — enables lock, WeakReference, conditional subscription
+- **Thread-safe invocation**: capture delegate copy then invoke
+- **EventArgs**: derive for typed payloads; EventArgs.Empty for parameterless events
+- **Weak event pattern**: prevents memory leaks when subscriber outlives publisher
+
+### Memory Leak Prevention
+
+```csharp
+// Common memory leak pattern
+public class Subscriber : IDisposable
+{
+    private readonly Publisher _publisher;
+    
+    public Subscriber(Publisher publisher)
+    {
+        _publisher = publisher;
+        _publisher.DataReceived += OnDataReceived; // Creates strong reference
+    }
+    
+    private void OnDataReceived(object? sender, EventArgs e)
+    {
+        // Handle event
+    }
+    
+    public void Dispose()
+    {
+        // MUST unsubscribe to prevent leak
+        _publisher.DataReceived -= OnDataReceived;
+    }
+}
+```
+
+<Warning>
+Always unsubscribe from events when the subscriber is disposed. Event subscriptions create strong references from publisher to subscriber, preventing garbage collection.
+</Warning>
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Always unsubscribe (−=) from events when the subscriber is disposed
+    - Use EventHandler&lt;TArgs&gt; as the standard event delegate signature
+    - Implement OnXxx() protected virtual methods to allow derived classes to raise events
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Invoke events without null checking — throw if no subscribers
+    - Forget to unsubscribe long-lived subscribers from short-lived publisher events
+    - Call Invoke() directly on the backing field without capturing a local copy (race condition)
+  </Card>
+</CardGroup>
+
+## Advanced Delegate Patterns
+
+<Accordion title="Delegate Caching for Performance">
+```csharp
+// Inefficient: creates new delegate instance on each call
+for (int i = 0; i < 1000; i++)
+{
+    items.ForEach(item => Process(item)); // Allocates delegate
+}
+
+// Efficient: cache the delegate
+private static readonly Action<Item> ProcessAction = item => Process(item);
+
+for (int i = 0; i < 1000; i++)
+{
+    items.ForEach(ProcessAction); // Reuses cached delegate
+}
+
+// Or use a method group (also cached by compiler)
+for (int i = 0; i < 1000; i++)
+{
+    items.ForEach(Process); // Method group conversion cached
+}
+```
+
+Caching delegates avoids allocation overhead in hot paths.
+</Accordion>

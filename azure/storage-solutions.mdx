@@ -1,0 +1,435 @@
+---
+title: Azure Storage Solutions
+description: Master Azure Cosmos DB and Blob Storage for the AZ-204 certification exam
+---
+
+# Azure Storage Solutions
+
+Azure provides multiple storage services for different scenarios. The AZ-204 exam focuses on **Cosmos DB** for NoSQL database scenarios and **Blob Storage** for object storage.
+
+## Azure Cosmos DB
+
+Cosmos DB is a globally distributed, multi-model database service offering turnkey global distribution and elastic scalability.
+
+### Consistency Models
+
+Cosmos DB offers five tunable consistency levels trading off between consistency guarantees and performance.
+
+<Tabs>
+  <Tab title="Strong">
+    **Strongest consistency**
+    
+    - Linearizable reads (always latest committed write)
+    - Highest latency and cost
+    - Use for financial/inventory systems requiring strict consistency
+  </Tab>
+  
+  <Tab title="Bounded Staleness">
+    **Configurable lag**
+    
+    - Reads may lag by K versions or T time
+    - Guarantees ordering
+    - Balanced consistency and performance
+  </Tab>
+  
+  <Tab title="Session">
+    **Default and most common**
+    
+    - Read-your-own-writes within session
+    - Consistent within a session token
+    - Sufficient for most applications
+  </Tab>
+  
+  <Tab title="Consistent Prefix">
+    **Ordering guaranteed**
+    
+    - No out-of-order reads
+    - May see stale data
+    - Weaker than Bounded Staleness
+  </Tab>
+  
+  <Tab title="Eventual">
+    **Fastest and cheapest**
+    
+    - No ordering guarantee
+    - Highest availability
+    - Use for analytics and non-critical data
+  </Tab>
+</Tabs>
+
+```csharp
+// Set consistency in SDK
+var client = new CosmosClient(connStr, new CosmosClientOptions
+{
+    ConsistencyLevel = ConsistencyLevel.Session
+});
+
+// Per-request override (can only relax, not strengthen)
+var options = new ItemRequestOptions
+{
+    ConsistencyLevel = ConsistencyLevel.Eventual
+};
+await container.ReadItemAsync<Item>(id, pk, options);
+```
+
+<Tip>
+  You can override consistency per-request to a **weaker** level (e.g., Session → Eventual) but never to a stronger level than the account default.
+</Tip>
+
+### Partitioning Strategies
+
+The partition key determines how data is distributed across physical partitions for scale and performance.
+
+**Key Concepts:**
+
+- **Partition key** - Immutable, chosen at container creation
+- **Logical partition** - All items with same partition key value (20 GB limit)
+- **Physical partition** - 50 GB, 10,000 RU/s limit
+- **High cardinality** - Many distinct values (userId, orderId)
+- **Synthetic keys** - Combine fields for better distribution
+
+```csharp
+// Create container with partition key
+var response = await database.CreateContainerAsync(
+    new ContainerProperties("orders", "/customerId"),
+    throughput: 400);
+
+// Synthetic partition key (tenant + date)
+var item = new 
+{ 
+    id = "abc", 
+    partitionKey = $"{tenantId}_{date:yyyy-MM}" 
+};
+
+// Query with partition key for efficiency
+var items = container.GetItemQueryIterator<Order>(
+    "SELECT * FROM c WHERE c.customerId = '123'",
+    requestOptions: new QueryRequestOptions 
+    { 
+        PartitionKey = new PartitionKey("123") 
+    });
+```
+
+<Warning>
+  Avoid partition keys that create "hot" partitions - using always-current date means all writes go to one partition. Add random suffix or tenant ID for distribution.
+</Warning>
+
+### Request Units (RU/s)
+
+Request Units are the abstracted throughput currency in Cosmos DB.
+
+**RU Pricing:**
+
+- **1 RU** = Cost to read a 1 KB item by ID
+- **Writes** cost ~5x more than reads
+- **Cross-partition queries** consume proportionally more
+- **400 RU/s** minimum provisioned throughput
+
+**Throughput Models:**
+
+<CardGroup cols={2}>
+  <Card title="Provisioned Throughput" icon="gauge">
+    - Fixed RU/s allocation
+    - Container or database level
+    - Predictable cost
+    - Throttling at 429 if exceeded
+  </Card>
+  <Card title="Autoscale" icon="arrows-up-down">
+    - Scales 10% to 100% of max RU/s
+    - Pay for what you use
+    - Best for variable workloads
+  </Card>
+  <Card title="Serverless" icon="bolt">
+    - Pay per RU consumed
+    - No provisioning
+    - Best for dev/test
+    - 5,000 RU/s per operation limit
+  </Card>
+  <Card title="Database-Shared" icon="share-nodes">
+    - Up to 25 containers share throughput
+    - Cost optimization
+    - Throughput divided among containers
+  </Card>
+</CardGroup>
+
+```csharp
+// Set throughput at container creation
+await database.CreateContainerAsync("items", "/pk", throughput: 1000);
+
+// Autoscale throughput
+await database.CreateContainerAsync(
+    "items", "/pk",
+    ThroughputProperties.CreateAutoscaleThroughput(4000)); // max RU/s
+
+// Check consumed RU in response
+var response = await container.ReadItemAsync<Item>(id, pk);
+Console.WriteLine(response.RequestCharge);
+```
+
+<Note>
+  Always log `response.RequestCharge` in development to understand RU consumption - this identifies expensive queries before production.
+</Note>
+
+### Indexing Policies
+
+Cosmos DB indexes all properties by default. Custom policies optimize write performance and enable complex queries.
+
+**Policy Options:**
+
+- **Default** - All paths indexed automatically
+- **Exclude paths** - Reduce write cost for unused properties
+- **Composite index** - Required for ORDER BY on multiple fields
+- **Spatial index** - For geospatial queries
+
+```csharp
+// Custom indexing policy
+var policy = new IndexingPolicy
+{
+    IndexingMode = IndexingMode.Consistent,
+    ExcludedPaths = 
+    { 
+        new ExcludedPath { Path = "/largeBlob/*" } 
+    },
+    CompositeIndexes =
+    {
+        new Collection<CompositePath>
+        {
+            new() { Path = "/lastName", Order = CompositePathSortOrder.Ascending },
+            new() { Path = "/firstName", Order = CompositePathSortOrder.Ascending }
+        }
+    }
+};
+
+var containerProperties = new ContainerProperties("users", "/userId")
+{
+    IndexingPolicy = policy
+};
+```
+
+<Tip>
+  Add composite indexes when using ORDER BY on multiple fields - without them, Cosmos DB returns an error or performs a full scan at high RU cost.
+</Tip>
+
+### Change Feed
+
+The change feed is a persistent log of changes enabling event-driven architectures.
+
+**Key Features:**
+
+- Captures **inserts and updates** (not deletes by default)
+- **Full fidelity mode** captures deletes and pre/post states
+- **Change Feed Processor** - Distributed consumption with leases
+- **Azure Functions trigger** uses Change Feed Processor internally
+
+```csharp
+// Change Feed Processor
+var processor = container
+    .GetChangeFeedProcessorBuilder<Item>(
+        processorName: "myProcessor",
+        onChangesDelegate: async (changes, token) =>
+        {
+            foreach (var item in changes)
+                await ProcessChangeAsync(item);
+        })
+    .WithInstanceName("instance1")
+    .WithLeaseContainer(leaseContainer)
+    .Build();
+
+await processor.StartAsync();
+```
+
+## Azure Blob Storage
+
+Blob Storage provides object storage for unstructured data like documents, images, videos, and backups.
+
+### Account Tiers
+
+Blob Storage offers account types and access tiers trading storage cost for access cost.
+
+**Access Tiers:**
+
+<Tabs>
+  <Tab title="Hot">
+    - Highest storage cost, lowest access cost
+    - Frequent access patterns
+    - Optimized for data accessed regularly
+    - Default tier for new blobs
+  </Tab>
+  
+  <Tab title="Cool">
+    - Lower storage cost, higher access cost
+    - **30-day minimum retention**
+    - Infrequent access (backups, logs)
+    - Early deletion fees if removed before 30 days
+  </Tab>
+  
+  <Tab title="Cold">
+    - Even lower storage cost
+    - **90-day minimum retention**
+    - Rare access scenarios
+    - Higher access latency
+  </Tab>
+  
+  <Tab title="Archive">
+    - Cheapest storage, offline
+    - **180-day minimum retention**
+    - **1-15 hour rehydration time**
+    - Long-term archival
+    - Cannot read without rehydration
+  </Tab>
+</Tabs>
+
+```bash
+# Set blob tier
+az storage blob set-tier \
+    --account-name myStorage \
+    --container-name myContainer \
+    --name myBlob.log \
+    --tier Archive
+
+# Rehydrate from Archive
+az storage blob set-tier \
+    --tier Hot \
+    --rehydrate-priority High \
+    --account-name myStorage \
+    --container-name myContainer \
+    --name myBlob.log
+```
+
+```csharp
+// SDK tier in upload
+await blobClient.SetAccessTierAsync(AccessTier.Cool);
+```
+
+<Warning>
+  Archive tier blobs cannot be read directly - they must be **rehydrated** to Hot or Cool first, taking 1-15 hours (Standard) or up to 1 hour (High priority).
+</Warning>
+
+### Shared Access Signatures (SAS)
+
+SAS tokens grant time-limited, scoped permissions without sharing account keys.
+
+**SAS Types:**
+
+- **Account SAS** - Broad access across services
+- **Service SAS** - Scoped to one service (Blob, Queue, Table)
+- **User Delegation SAS** - Uses Azure AD identity (most secure)
+
+```csharp
+// Generate Service SAS for blob container
+var sasBuilder = new BlobSasBuilder
+{
+    BlobContainerName = "reports",
+    Resource = "c", // container
+    ExpiresOn = DateTimeOffset.UtcNow.AddHours(1),
+    Protocol = SasProtocol.Https
+};
+sasBuilder.SetPermissions(BlobContainerSasPermissions.Read);
+
+var sas = sasBuilder.ToSasQueryParameters(
+    new StorageSharedKeyCredential(account, key));
+
+var uri = new Uri($"https://{account}.blob.core.windows.net/reports?{sas}");
+```
+
+```bash
+# CLI generate Account SAS
+az storage account generate-sas \
+    --account-name myStorage \
+    --permissions rl \
+    --resource-types co \
+    --services b \
+    --expiry 2025-01-01T00:00Z
+```
+
+<Tip>
+  Prefer **User Delegation SAS** over account-key SAS for blob storage - it uses Azure AD, can be scoped per-user identity, and doesn't expose the storage account key.
+</Tip>
+
+### Storage Service Encryption
+
+All Azure Storage data is automatically encrypted at rest using AES-256.
+
+**Encryption Options:**
+
+- **Microsoft-managed keys (MMK)** - Default, no configuration
+- **Customer-managed keys (CMK)** - Stored in Key Vault, you control rotation
+- **Customer-provided keys (CPK)** - Per-request, key never stored
+- **Infrastructure encryption** - Double encryption for compliance
+
+```bash
+# Enable CMK
+az storage account update \
+    --name myStorage \
+    --resource-group myRG \
+    --encryption-key-source Microsoft.Keyvault \
+    --encryption-key-vault https://myvault.vault.azure.net \
+    --encryption-key-name myKey \
+    --encryption-key-version "" # auto-rotate
+```
+
+```csharp
+// CPK per-request in SDK
+var options = new BlobUploadOptions 
+{
+    CustomerProvidedKey = new CustomerProvidedKey(keyBytes) 
+};
+await blobClient.UploadAsync(stream, options);
+```
+
+### Data Protection Features
+
+Azure Blob Storage offers multiple protection mechanisms.
+
+<CardGroup cols={2}>
+  <Card title="Soft Delete" icon="trash-undo">
+    - 1-365 day retention
+    - Recoverable before permanent deletion
+    - Protects against accidental delete
+  </Card>
+  <Card title="Versioning" icon="code-branch">
+    - Auto-saves prior versions on write
+    - Protects against overwrites
+    - Works with soft delete
+  </Card>
+  <Card title="Point-in-Time Restore" icon="clock-rotate-left">
+    - Roll back containers to earlier state
+    - Time-based recovery
+    - Requires versioning
+  </Card>
+  <Card title="Immutability Policies" icon="lock">
+    - Time-based or legal hold
+    - WORM (write-once-read-many)
+    - SEC/FINRA compliance
+  </Card>
+</CardGroup>
+
+```bash
+# Enable soft delete
+az storage blob service-properties delete-policy update \
+    --account-name myStorage \
+    --enable true \
+    --days-retained 30
+
+# Enable blob versioning
+az storage account blob-service-properties update \
+    --account-name myStorage \
+    --enable-versioning true
+```
+
+```csharp
+// Restore soft-deleted blob
+await blobClient.UndeleteAsync();
+```
+
+## Exam Checklist
+
+- [ ] Understand Cosmos DB consistency levels and tradeoffs
+- [ ] Know partition key design best practices
+- [ ] Understand Request Units and cost optimization
+- [ ] Know indexing policy options and composite indexes
+- [ ] Understand Change Feed patterns and processors
+- [ ] Know blob storage access tiers and use cases
+- [ ] Understand SAS token types and security
+- [ ] Know encryption options (MMK, CMK, CPK)
+- [ ] Understand data protection features

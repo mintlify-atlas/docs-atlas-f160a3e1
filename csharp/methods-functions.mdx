@@ -1,0 +1,649 @@
+---
+title: Methods and Functions
+description: Comprehensive guide to creating and using methods, parameters, return values, and advanced method features in C#
+---
+
+# Methods and Functions in C#
+
+Methods are reusable blocks of code that perform specific tasks. Understanding methods is essential for writing modular, maintainable C# applications.
+
+## Method Basics
+
+### Method Declaration
+
+A method consists of a signature and body:
+
+```csharp
+// Basic method structure
+public returnType MethodName(parameters)
+{
+    // Method body
+    return value;
+}
+
+// Example
+public int Add(int a, int b)
+{
+    return a + b;
+}
+
+// Void method (no return value)
+public void PrintMessage(string message)
+{
+    Console.WriteLine(message);
+}
+```
+
+### Method Components
+
+<Tabs>
+  <Tab title="Access Modifiers">
+    ```csharp
+    public void PublicMethod() { }      // Accessible everywhere
+    private void PrivateMethod() { }    // Only within the class
+    protected void ProtectedMethod() { } // Within class and subclasses
+    internal void InternalMethod() { }  // Within same assembly
+    protected internal void Method() { } // Protected OR internal
+    private protected void Method() { }  // Protected AND internal
+    ```
+  </Tab>
+  
+  <Tab title="Return Types">
+    ```csharp
+    int GetNumber() => 42;                    // Returns int
+    string GetName() => "Alice";              // Returns string
+    void DoWork() { }                         // Returns nothing
+    Task DoWorkAsync() => Task.CompletedTask; // Returns Task
+    Task<int> GetValueAsync() => Task.FromResult(42); // Returns Task<int>
+    ```
+  </Tab>
+  
+  <Tab title="Parameters">
+    ```csharp
+    // Value parameters (copy)
+    void Method(int value) { }
+    
+    // Reference parameters (ref)
+    void Method(ref int value) { }
+    
+    // Output parameters (out)
+    void Method(out int result) { result = 42; }
+    
+    // Parameter arrays (params)
+    void Method(params int[] numbers) { }
+    
+    // Optional parameters
+    void Method(int required, int optional = 10) { }
+    ```
+  </Tab>
+</Tabs>
+
+## Method Parameters
+
+### Value Parameters
+
+Default parameter passing - by value:
+
+```csharp
+public void ModifyValue(int number)
+{
+    number = 100;  // Only modifies local copy
+}
+
+int x = 10;
+ModifyValue(x);
+Console.WriteLine(x);  // Still 10 - original unchanged
+```
+
+### Reference Parameters (ref)
+
+Pass by reference - modifies the original variable:
+
+```csharp
+public void ModifyReference(ref int number)
+{
+    number = 100;  // Modifies original variable
+}
+
+int x = 10;
+ModifyReference(ref x);
+Console.WriteLine(x);  // 100 - original was modified
+```
+
+<Note>
+`ref` requires the variable to be initialized before passing and must be used at both declaration and call site.
+</Note>
+
+### Output Parameters (out)
+
+Returning multiple values:
+
+```csharp
+public bool TryParse(string input, out int result)
+{
+    if (int.TryParse(input, out result))
+    {
+        return true;
+    }
+    result = 0;
+    return false;
+}
+
+// Usage
+if (TryParse("123", out int value))
+{
+    Console.WriteLine($"Parsed: {value}");
+}
+
+// Inline declaration (C# 7.0+)
+if (TryParse("123", out var value))
+{
+    Console.WriteLine($"Parsed: {value}");
+}
+
+// Discard unused out parameters
+if (dict.TryGetValue(key, out _))  // Don't care about value
+{
+    Console.WriteLine("Key exists");
+}
+```
+
+### In Parameters (C# 7.2+)
+
+Read-only reference parameters for performance:
+
+```csharp
+public double Calculate(in Point3D point)
+{
+    // point is passed by reference but cannot be modified
+    return Math.Sqrt(point.X * point.X + point.Y * point.Y + point.Z * point.Z);
+}
+
+// Useful for large structs to avoid copying
+public readonly struct Point3D
+{
+    public double X { get; init; }
+    public double Y { get; init; }
+    public double Z { get; init; }
+}
+```
+
+<Tip>
+Use `in` parameters for large readonly structs to avoid copy overhead while preventing modification. For small structs (≤16 bytes), regular value parameters are fine.
+</Tip>
+
+### Optional Parameters
+
+Provide default values for parameters:
+
+```csharp
+public void CreateUser(string name, int age = 18, string country = "USA")
+{
+    Console.WriteLine($"{name}, {age}, {country}");
+}
+
+// Usage
+CreateUser("Alice");                    // Uses defaults: 18, USA
+CreateUser("Bob", 25);                  // Uses default: USA
+CreateUser("Charlie", 30, "Canada");    // All specified
+
+// Named arguments
+CreateUser(name: "Dave", country: "UK"); // age uses default
+```
+
+<Warning>
+Optional parameters must come after required parameters. Default values must be compile-time constants.
+</Warning>
+
+### Parameter Arrays (params)
+
+Variable number of arguments:
+
+```csharp
+public int Sum(params int[] numbers)
+{
+    int total = 0;
+    foreach (int num in numbers)
+    {
+        total += num;
+    }
+    return total;
+}
+
+// Usage
+int result1 = Sum(1, 2, 3);           // 6
+int result2 = Sum(1, 2, 3, 4, 5);     // 15
+int result3 = Sum();                   // 0
+int[] arr = { 10, 20, 30 };
+int result4 = Sum(arr);                // 60
+```
+
+### Named Arguments
+
+Specify parameters by name:
+
+```csharp
+public void DisplayInfo(string name, int age, string city)
+{
+    Console.WriteLine($"{name}, {age}, from {city}");
+}
+
+// Positional arguments
+DisplayInfo("Alice", 30, "NYC");
+
+// Named arguments
+DisplayInfo(name: "Bob", age: 25, city: "LA");
+
+// Mixed (positional must come first)
+DisplayInfo("Charlie", city: "Boston", age: 35);
+
+// Skip optional parameters
+CreateConnection(server: "localhost", timeout: 30);
+```
+
+## Return Values
+
+### Single Return Value
+
+```csharp
+public int GetAge()
+{
+    return 30;
+}
+
+public string GetName()
+{
+    return "Alice";
+}
+
+// Expression-bodied method
+public int Square(int x) => x * x;
+```
+
+### Multiple Return Values with Tuples
+
+```csharp
+// Return tuple
+public (string Name, int Age) GetPerson()
+{
+    return ("Alice", 30);
+}
+
+// Usage
+var person = GetPerson();
+Console.WriteLine($"{person.Name} is {person.Age}");
+
+// Deconstruction
+var (name, age) = GetPerson();
+Console.WriteLine($"{name} is {age}");
+
+// Discard unwanted values
+var (name, _) = GetPerson();  // Only want name
+
+// Complex example
+public (bool Success, string Message, int Code) ProcessRequest()
+{
+    return (true, "Success", 200);
+}
+```
+
+### Early Return
+
+```csharp
+public int FindIndex(int[] array, int target)
+{
+    if (array == null || array.Length == 0)
+        return -1;  // Early return for invalid input
+    
+    for (int i = 0; i < array.Length; i++)
+    {
+        if (array[i] == target)
+            return i;  // Early return when found
+    }
+    
+    return -1;  // Not found
+}
+```
+
+## Method Overloading
+
+Multiple methods with same name but different parameters:
+
+```csharp
+public class Calculator
+{
+    // Overloaded methods
+    public int Add(int a, int b)
+    {
+        return a + b;
+    }
+    
+    public double Add(double a, double b)
+    {
+        return a + b;
+    }
+    
+    public int Add(int a, int b, int c)
+    {
+        return a + b + c;
+    }
+    
+    // Usage
+    var calc = new Calculator();
+    int sum1 = calc.Add(1, 2);        // Calls int version
+    double sum2 = calc.Add(1.5, 2.5); // Calls double version
+    int sum3 = calc.Add(1, 2, 3);     // Calls three-parameter version
+}
+```
+
+<Note>
+Overload resolution is based on the number, types, and order of parameters - not the return type.
+</Note>
+
+## Expression-Bodied Members
+
+Concise syntax for simple methods (C# 6.0+):
+
+```csharp
+public class Person
+{
+    private string _name;
+    
+    // Expression-bodied method
+    public string GetGreeting() => $"Hello, {_name}!";
+    
+    // Expression-bodied property getter
+    public string UpperName => _name.ToUpper();
+    
+    // Expression-bodied property with getter and setter (C# 7.0+)
+    public string Name
+    {
+        get => _name;
+        set => _name = value ?? throw new ArgumentNullException(nameof(value));
+    }
+    
+    // Expression-bodied constructor (C# 7.0+)
+    public Person(string name) => _name = name;
+    
+    // Expression-bodied finalizer (C# 7.0+)
+    ~Person() => Console.WriteLine("Destructor called");
+}
+```
+
+## Local Functions
+
+Nested methods within methods (C# 7.0+):
+
+```csharp
+public int CalculateFactorial(int n)
+{
+    // Local function - only accessible within this method
+    int Factorial(int x)
+    {
+        if (x <= 1) return 1;
+        return x * Factorial(x - 1);
+    }
+    
+    if (n < 0)
+        throw new ArgumentException("Must be non-negative", nameof(n));
+    
+    return Factorial(n);
+}
+
+// Local function with captured variables
+public IEnumerable<int> GetMultiples(int factor, int count)
+{
+    // Captures 'factor' and 'count' from outer scope
+    IEnumerable<int> GenerateMultiples()
+    {
+        for (int i = 1; i <= count; i++)
+        {
+            yield return factor * i;
+        }
+    }
+    
+    return GenerateMultiples();
+}
+```
+
+<Tip>
+Use local functions for helper logic that's only used within one method. They can access variables from the outer scope (closure) and improve code organization.
+</Tip>
+
+## Static Local Functions (C# 8.0+)
+
+Local functions that cannot capture outer variables:
+
+```csharp
+public int Calculate(int x, int y)
+{
+    // Static local function - cannot access x, y from outer scope
+    static int Add(int a, int b)
+    {
+        return a + b;
+    }
+    
+    return Add(x, y);  // Must pass as parameters
+}
+```
+
+## Method Attributes and Modifiers
+
+### Common Method Modifiers
+
+```csharp
+public class Example
+{
+    // Static method - belongs to type, not instance
+    public static int Add(int a, int b) => a + b;
+    
+    // Virtual method - can be overridden in derived classes
+    public virtual void Process() { }
+    
+    // Abstract method - must be implemented in derived classes
+    public abstract void Execute();
+    
+    // Override method - overrides base class virtual/abstract method
+    public override void Process() { base.Process(); }
+    
+    // Sealed override - prevents further overriding
+    public sealed override void Process() { }
+    
+    // Async method - returns Task or Task<T>
+    public async Task<string> FetchDataAsync()
+    {
+        await Task.Delay(1000);
+        return "Data";
+    }
+}
+```
+
+### Extension Methods
+
+Add methods to existing types (C# 3.0+):
+
+```csharp
+public static class StringExtensions
+{
+    // Extension method - note 'this' on first parameter
+    public static bool IsValidEmail(this string email)
+    {
+        return email.Contains("@") && email.Contains(".");
+    }
+    
+    public static string Truncate(this string value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value)) return value;
+        return value.Length <= maxLength ? value : value.Substring(0, maxLength);
+    }
+}
+
+// Usage - called as if they were instance methods
+string email = "user@example.com";
+bool valid = email.IsValidEmail();  // true
+
+string text = "Hello World";
+string short = text.Truncate(5);    // "Hello"
+```
+
+<Note>
+Extension methods must be defined in static classes and the first parameter must use the `this` modifier. They're syntactic sugar for static method calls.
+</Note>
+
+## Recursion
+
+Methods that call themselves:
+
+```csharp
+// Classic recursion - factorial
+public int Factorial(int n)
+{
+    if (n <= 1)
+        return 1;  // Base case
+    return n * Factorial(n - 1);  // Recursive case
+}
+
+// Fibonacci sequence
+public int Fibonacci(int n)
+{
+    if (n <= 1) return n;
+    return Fibonacci(n - 1) + Fibonacci(n - 2);
+}
+
+// Tail recursion (optimizable)
+public int FactorialTailRecursive(int n, int accumulator = 1)
+{
+    if (n <= 1)
+        return accumulator;
+    return FactorialTailRecursive(n - 1, n * accumulator);
+}
+```
+
+<Warning>
+Recursion can cause stack overflow for deep call chains. The default stack size is ~1 MB. For deep recursion, consider iterative solutions or increasing stack size.
+</Warning>
+
+## Best Practices
+
+<Accordion title="Keep methods short and focused">
+```csharp
+// Bad - method does too much
+public void ProcessOrder(Order order)
+{
+    ValidateOrder(order);
+    CalculateTax(order);
+    ApplyDiscount(order);
+    SaveToDatabase(order);
+    SendConfirmationEmail(order);
+    UpdateInventory(order);
+}
+
+// Good - extract to smaller methods
+public void ProcessOrder(Order order)
+{
+    ValidateOrder(order);
+    CalculateOrderTotals(order);
+    SaveOrder(order);
+    NotifyCustomer(order);
+    UpdateInventory(order);
+}
+```
+</Accordion>
+
+<Accordion title="Use meaningful method names">
+```csharp
+// Bad
+public void DoStuff(int x) { }
+public int Calc(int a, int b) { }
+
+// Good
+public void ProcessPayment(decimal amount) { }
+public int CalculateTotalWithTax(int subtotal, decimal taxRate) { }
+```
+</Accordion>
+
+<Accordion title="Validate parameters early">
+```csharp
+public void ProcessUser(User user, string action)
+{
+    // Guard clauses at the start
+    if (user == null)
+        throw new ArgumentNullException(nameof(user));
+    
+    if (string.IsNullOrWhiteSpace(action))
+        throw new ArgumentException("Action cannot be empty", nameof(action));
+    
+    // Main logic
+    user.PerformAction(action);
+}
+```
+</Accordion>
+
+<Accordion title="Use expression-bodied members for simple methods">
+```csharp
+// Traditional
+public int GetAge()
+{
+    return DateTime.Now.Year - BirthYear;
+}
+
+// Expression-bodied (cleaner for simple methods)
+public int GetAge() => DateTime.Now.Year - BirthYear;
+```
+</Accordion>
+
+<Accordion title="Prefer out parameters or tuples over ref">
+```csharp
+// Instead of ref
+public void GetCoordinates(ref int x, ref int y) { }
+
+// Use out or tuple
+public (int X, int Y) GetCoordinates() => (10, 20);
+```
+</Accordion>
+
+## Constructor Chaining
+
+Reusing constructor logic:
+
+```csharp
+public class Server
+{
+    public string Host;
+    public int Port;
+
+    // Primary constructor - does the actual work
+    public Server(string host, int port)
+    {
+        Host = host;
+        Port = port;
+    }
+
+    // Chain to primary constructor using 'this'
+    public Server() : this("localhost", 8080) { }
+
+    // Another constructor chaining
+    public Server(string host) : this(host, 8080) { }
+}
+
+// Usage
+var server1 = new Server();                  // Uses defaults
+var server2 = new Server("example.com");     // Custom host
+var server3 = new Server("example.com", 443); // All custom
+```
+
+<Tip>
+**Constructor chaining best practice**: Chain all constructors to one primary constructor that does the actual initialization. This eliminates code duplication and makes refactoring easier.
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="C# Overview" href="/csharp/overview">
+    Review C# fundamentals
+  </Card>
+  
+  <Card title="Control Flow" href="/csharp/control-flow">
+    Master conditional logic and loops
+  </Card>
+</CardGroup>

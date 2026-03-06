@@ -1,0 +1,625 @@
+---
+title: Caching Strategies
+description: Multi-layer caching patterns, invalidation strategies, and cache-aware architecture
+---
+
+## Overview
+
+Caching exists at every layer of the stack: browser, CDN, reverse proxy, application (Redis), and database buffer pool. Each layer has different hit rate, invalidation complexity, and latency characteristics.
+
+<Note>
+A cache hit at any layer prevents all lower layers from serving the request. Design caching strategies from the user outward: browser → CDN → reverse proxy → application → database.
+</Note>
+
+## Cache Hierarchy
+
+```text
+// Request cache waterfall
+1. Browser cache:     hit if within max-age
+2. CDN PoP:          hit if within s-maxage
+3. Reverse proxy:    Varnish full-page cache
+4. Redis:            application key-value lookup
+5. DB read replica:  indexed query
+6. DB primary:       full query + write path
+
+// Each hit prevents all lower layers from serving
+```
+
+### Latency by Layer
+
+| Layer | Typical Latency | Capacity | Invalidation |
+|-------|----------------|----------|-------------|
+| Browser | 0ms (instant) | ~50-100MB | Cache-Control headers |
+| CDN | 10-50ms | TBs per PoP | API call or TTL |
+| Reverse Proxy | 1-5ms | GBs | Manual purge or TTL |
+| Application (Redis) | 1-3ms | 100s of GBs | Explicit DEL command |
+| Database Buffer | 0.1ms | RAM-limited | Automatic (LRU) |
+
+<Tip>
+Measure cache hit rate per layer in production. A namespace with less than 50% hit rate is either poorly keyed, has TTLs too short, or is caching data that changes too frequently to benefit.
+</Tip>
+
+## Caching Strategies
+
+<Tabs>
+  <Tab title="Cache-Aside">
+    **Pattern**: Application controls reads; load from DB on miss
+    
+    ```javascript
+    // Cache-Aside read path
+    async function getUser(id) {
+      // 1. Try cache
+      const hit = await redis.get(`user:${id}`);
+      if (hit) return JSON.parse(hit);
+      
+      // 2. Cache miss: load from DB
+      const user = await db.get(id);
+      
+      // 3. Populate cache with TTL + jitter
+      const ttl = 300 + Math.floor(Math.random() * 30);
+      await redis.setex(`user:${id}`, ttl, JSON.stringify(user));
+      
+      return user;
+    }
+    
+    // Write path: invalidate cache
+    async function updateUser(id, data) {
+      await db.update(id, data);
+      await redis.del(`user:${id}`);  // invalidate
+    }
+    ```
+    
+    **Pros**:
+    - Simple and most common
+    - Cache failure doesn't break the system
+    - Only requested data is cached
+    
+    **Cons**:
+    - Cache miss adds latency (DB round trip)
+    - Thundering herd on cold cache
+    - Stale data until invalidation
+  </Tab>
+  
+  <Tab title="Write-Through">
+    **Pattern**: Write to cache and DB synchronously
+    
+    ```javascript
+    // Write-Through: write to both
+    async function updateUser(id, data) {
+      await db.update(id, data);
+      await redis.setex(`user:${id}`, 3600, JSON.stringify(data));
+    }
+    
+    // Read always hits cache (pre-warmed)
+    async function getUser(id) {
+      const hit = await redis.get(`user:${id}`);
+      if (hit) return JSON.parse(hit);
+      
+      // Rare: cache miss (evicted or cold start)
+      const user = await db.get(id);
+      await redis.setex(`user:${id}`, 3600, JSON.stringify(user));
+      return user;
+    }
+    ```
+    
+    **Pros**:
+    - Cache always has fresh data
+    - Read always hits cache (fast)
+    - No thundering herd
+    
+    **Cons**:
+    - Write latency = cache + DB combined
+    - Wastes cache space (caches everything)
+    - Cache failure blocks writes
+  </Tab>
+  
+  <Tab title="Write-Behind (Write-Back)">
+    **Pattern**: Write to cache, async flush to DB
+    
+    ```javascript
+    // Write-Behind: immediate cache, async DB
+    async function updateUser(id, data) {
+      // 1. Write to cache (fast)
+      await redis.setex(`user:${id}`, 3600, JSON.stringify(data));
+      
+      // 2. Queue DB write (async)
+      await queue.send({
+        type: 'user_update',
+        id: id,
+        data: data
+      });
+    }
+    
+    // Background worker flushes to DB
+    queue.process(async (job) => {
+      await db.update(job.id, job.data);
+    });
+    ```
+    
+    **Pros**:
+    - Lowest write latency
+    - Batching possible (high throughput)
+    - Reduces DB write load
+    
+    **Cons**:
+    - Data loss if cache fails before flush
+    - Eventual consistency
+    - Complex failure recovery
+  </Tab>
+  
+  <Tab title="Refresh-Ahead">
+    **Pattern**: Pre-populate cache before expiry
+    
+    ```javascript
+    // Refresh-Ahead: proactive refresh for hot keys
+    async function getUser(id) {
+      const result = await redis.get(`user:${id}`);
+      
+      if (result) {
+        const { value, ttl } = JSON.parse(result);
+        
+        // Refresh if TTL < 20% remaining
+        if (ttl < 60) {
+          // Async refresh (don't block)
+          refreshUserCache(id).catch(err => logger.error(err));
+        }
+        
+        return value;
+      }
+      
+      // Cache miss: blocking load
+      return await loadAndCache(id);
+    }
+    ```
+    
+    **Pros**:
+    - Eliminates cache-miss latency for hot keys
+    - Always-fresh data for frequently accessed items
+    
+    **Cons**:
+    - Wastes resources on cold keys
+    - Requires heuristic for "hot" keys
+  </Tab>
+</Tabs>
+
+<Warning>
+Cache-Aside is the default choice for most applications. Only use Write-Through or Write-Behind when you have specific requirements and understand the trade-offs.
+</Warning>
+
+## Cache Invalidation Patterns
+
+> "There are only two hard things in Computer Science: cache invalidation and naming things." — Phil Karlton
+
+### TTL-Based Expiration
+
+Simplest strategy: set expiration time and accept bounded staleness:
+
+```javascript
+// TTL with jitter to prevent thundering herd
+const baseTTL = 300;  // 5 minutes
+const jitter = Math.floor(Math.random() * 30);
+await redis.setex(key, baseTTL + jitter, value);
+```
+
+<Note>
+**TTL jitter** prevents synchronized mass expiry. Without jitter, all cached items set at the same time expire simultaneously, causing a thundering herd to the database.
+</Note>
+
+### Explicit Invalidation
+
+Delete cache entries when data changes:
+
+```javascript
+// Single key invalidation
+await redis.del(`user:${userId}`);
+
+// Pattern-based invalidation
+await redis.eval(`
+  local keys = redis.call('keys', ARGV[1])
+  for i=1,#keys,5000 do
+    redis.call('del', unpack(keys, i, math.min(i+4999, #keys)))
+  end
+  return #keys
+`, 0, 'user:*');
+
+// Tagged invalidation (using Redis Sets)
+await redis.sadd(`tag:orders:user:${userId}`, `order:${orderId}`);
+
+// Invalidate all orders for a user
+const keys = await redis.smembers(`tag:orders:user:${userId}`);
+await redis.del(...keys);
+await redis.del(`tag:orders:user:${userId}`);
+```
+
+<Warning>
+`KEYS` pattern matching in Redis blocks the server. Use `SCAN` for production, or maintain explicit tag sets for bulk invalidation.
+</Warning>
+
+### Cache Stampede Prevention
+
+When cache expires, multiple requests may simultaneously query the database:
+
+```javascript
+// Distributed lock prevents stampede
+async function getWithStampedeProtection(key) {
+  // 1. Try cache
+  const cached = await redis.get(key);
+  if (cached) return JSON.parse(cached);
+  
+  // 2. Acquire lock (only one request proceeds)
+  const lockKey = `lock:${key}`;
+  const lockAcquired = await redis.set(
+    lockKey, 
+    'locked', 
+    'EX', 10,  // 10 sec expiry
+    'NX'       // only if not exists
+  );
+  
+  if (lockAcquired) {
+    try {
+      // 3. Load from DB (only this request)
+      const value = await db.get(key);
+      await redis.setex(key, 300, JSON.stringify(value));
+      return value;
+    } finally {
+      await redis.del(lockKey);
+    }
+  } else {
+    // 4. Lock held by another request: wait and retry
+    await sleep(100);
+    return getWithStampedeProtection(key);
+  }
+}
+```
+
+### Probabilistic Early Expiration
+
+Refresh before expiry based on probability:
+
+```javascript
+function shouldRefresh(ttl, beta = 1.0) {
+  // XFetch algorithm: probabilistic early refresh
+  const delta = Date.now() - startTime;
+  return delta * beta * Math.log(Math.random()) >= ttl;
+}
+
+async function getUser(id) {
+  const cached = await redis.get(`user:${id}`);
+  
+  if (cached) {
+    const { value, ttl, startTime } = JSON.parse(cached);
+    
+    // Probabilistically refresh before expiry
+    if (shouldRefresh(ttl, startTime)) {
+      // Async refresh in background
+      refreshUser(id).catch(err => logger.error(err));
+    }
+    
+    return value;
+  }
+  
+  // Cache miss: blocking load
+  return loadUser(id);
+}
+```
+
+## HTTP Caching Headers
+
+### Cache-Control Directives
+
+```http
+GET /api/user/123
+Cache-Control: public, s-maxage=86400, max-age=3600, stale-while-revalidate=60
+ETag: "33a64df551425fcc55e4d42a148795d9f25f89d4"
+Last-Modified: Wed, 21 Oct 2023 07:28:00 GMT
+```
+
+<Tabs>
+  <Tab title="Cache-Control">
+    ```text
+    // Layered caching: CDN vs browser
+    Cache-Control: public, s-maxage=86400, max-age=3600
+    // CDN caches 24h; browser caches 1h
+    
+    // Private user data: no CDN caching
+    Cache-Control: private, max-age=300
+    
+    // Never cache (authentication, checkout)
+    Cache-Control: private, no-store, no-cache, must-revalidate
+    
+    // Immutable assets (versioned URLs)
+    Cache-Control: public, max-age=31536000, immutable
+    ```
+    
+    **Directives**:
+    - `public`: cacheable by CDN and browser
+    - `private`: cacheable only by browser
+    - `no-store`: do not cache at all
+    - `no-cache`: must revalidate (check ETag)
+    - `max-age`: browser TTL (seconds)
+    - `s-maxage`: CDN TTL (seconds)
+    - `immutable`: never revalidate (versioned assets)
+    - `stale-while-revalidate`: serve stale while fetching fresh
+  </Tab>
+  
+  <Tab title="ETag & Conditional Requests">
+    Server sends ETag hash; client sends it back for conditional requests:
+    
+    ```javascript
+    // Initial request
+    app.get('/api/data', (req, res) => {
+      const data = getData();
+      const etag = crypto.createHash('md5').update(JSON.stringify(data)).digest('hex');
+      
+      res.set('ETag', `"${etag}"`);
+      res.set('Cache-Control', 'max-age=0, must-revalidate');
+      res.json(data);
+    });
+    
+    // Subsequent request with If-None-Match
+    // If ETag matches: 304 Not Modified (no body)
+    // If ETag differs: 200 OK (full body)
+    if (req.get('If-None-Match') === etag) {
+      return res.status(304).end();
+    }
+    ```
+    
+    **Benefits**:
+    - Bandwidth savings (304 has no body)
+    - Freshness guarantee (revalidates on access)
+    - Works with dynamic content
+  </Tab>
+  
+  <Tab title="Vary Header">
+    Cache different versions based on request headers:
+    
+    ```http
+    GET /api/data
+    Accept-Encoding: gzip
+    Accept-Language: en-US
+    
+    HTTP/1.1 200 OK
+    Vary: Accept-Encoding, Accept-Language
+    Cache-Control: public, max-age=3600
+    ```
+    
+    **Use cases**:
+    - `Vary: Accept-Encoding` (gzip vs brotli)
+    - `Vary: Accept-Language` (i18n)
+    - `Vary: User-Agent` (mobile vs desktop)
+    
+    <Warning>
+    `Vary: User-Agent` creates a separate cache entry per user agent string, which fragments cache and reduces hit rate.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Versioned Assets for Long TTLs
+
+```html
+<!-- BAD: must revalidate every time -->
+<script src="/js/app.js"></script>
+<link rel="stylesheet" href="/css/main.css">
+
+<!-- GOOD: 1-year TTL + instant "invalidation" via new filename -->
+<script src="/js/app.v2.5.3.min.js"></script>
+<link rel="stylesheet" href="/css/main.a3f8d9c.min.css">
+```
+
+```text
+Cache-Control: public, max-age=31536000, immutable
+// 1 year TTL: file never changes
+// "Invalidate" by deploying new filename
+```
+
+<Tip>
+Use versioned filenames (content hash or semver) with 1-year TTLs for static assets. This achieves instant cache "invalidation" without waiting for CDN TTL expiry.
+</Tip>
+
+## Redis Patterns
+
+### Data Structure Selection
+
+<Tabs>
+  <Tab title="String (Key-Value)">
+    ```bash
+    # Simple key-value
+    SET user:1001 '{"name":"Alice","email":"alice@ex.com"}'
+    GET user:1001
+    
+    # Atomic increment
+    INCR pageviews:post:42
+    INCRBY rate_limit:user:1001 1
+    
+    # Set with expiry
+    SETEX session:abc123 3600 '{"userId":1001}'
+    ```
+  </Tab>
+  
+  <Tab title="Hash (Object Fields)">
+    ```bash
+    # Store object fields separately
+    HSET user:1001 name "Alice" email "alice@ex.com" age 30
+    HGET user:1001 name
+    HGETALL user:1001
+    
+    # Atomic field increment
+    HINCRBY user:1001 login_count 1
+    
+    # Better than JSON for partial updates
+    HSET user:1001 email "newemail@ex.com"  # only update one field
+    ```
+  </Tab>
+  
+  <Tab title="List (Queue, Timeline)">
+    ```bash
+    # Queue (FIFO)
+    LPUSH queue:emails '{"to":"alice@ex.com","subject":"..."}'  # enqueue
+    BRPOP queue:emails 5  # blocking dequeue (5s timeout)
+    
+    # Timeline (most recent first)
+    LPUSH timeline:user:1001 "post:42"
+    LRANGE timeline:user:1001 0 9  # get 10 most recent
+    LTRIM timeline:user:1001 0 99  # keep only 100 items
+    ```
+  </Tab>
+  
+  <Tab title="Set (Unique Items, Tags)">
+    ```bash
+    # Unique set membership
+    SADD tags:post:42 "redis" "caching" "performance"
+    SISMEMBER tags:post:42 "redis"  # O(1) membership test
+    
+    # Set operations
+    SINTER tags:post:42 tags:post:43  # common tags
+    SUNION tags:post:42 tags:post:43  # all tags
+    
+    # Random sampling
+    SRANDMEMBER tags:post:42 3  # get 3 random tags
+    ```
+  </Tab>
+  
+  <Tab title="Sorted Set (Leaderboard, Priority)">
+    ```bash
+    # Leaderboard
+    ZADD leaderboard 9500 "player123" 8700 "player456"
+    ZINCRBY leaderboard 100 "player123"  # add score
+    
+    # Top 10
+    ZREVRANGE leaderboard 0 9 WITHSCORES
+    
+    # Player rank
+    ZREVRANK leaderboard "player123"
+    
+    # Range by score
+    ZRANGEBYSCORE leaderboard 8000 9000
+    
+    # Time-based expiry (score = timestamp)
+    ZADD sessions (UNIX_TIMESTAMP) "session:abc"
+    ZREMRANGEBYSCORE sessions 0 (NOW - 3600)  # remove expired
+    ```
+  </Tab>
+</Tabs>
+
+### Redis Eviction Policies
+
+```conf
+# redis.conf
+maxmemory 2gb
+maxmemory-policy allkeys-lru
+```
+
+| Policy | Behavior |
+|--------|----------|
+| `noeviction` | Return error when memory full (default) |
+| `allkeys-lru` | Evict least recently used keys |
+| `allkeys-lfu` | Evict least frequently used keys |
+| `volatile-lru` | Evict LRU among keys with TTL |
+| `volatile-ttl` | Evict keys with shortest TTL |
+| `allkeys-random` | Evict random keys |
+
+<Tip>
+Use `allkeys-lru` for cache workloads where all keys are candidates for eviction. Use `volatile-lru` when you have mixed data (persistent + cache) and only cache keys have TTLs.
+</Tip>
+
+## Monitoring Cache Health
+
+### Key Metrics
+
+```javascript
+// Application-level metrics
+const cacheHits = redis.get('stats:cache:hits');
+const cacheMisses = redis.get('stats:cache:misses');
+const hitRate = cacheHits / (cacheHits + cacheMisses);
+
+if (hitRate < 0.5) {
+  alert('Cache hit rate below 50% — investigate key TTLs or access patterns');
+}
+```
+
+```bash
+# Redis INFO stats
+redis-cli INFO stats
+
+# Key metrics:
+keyspace_hits:842765
+keyspace_misses:103450
+evicted_keys:1532
+expired_keys:45123
+
+# Hit rate calculation
+Hit Rate = keyspace_hits / (keyspace_hits + keyspace_misses)
+         = 842765 / (842765 + 103450)
+         = 89.1%  ← healthy
+```
+
+### Redis Slow Log
+
+```bash
+# Configure slow log threshold
+CONFIG SET slowlog-log-slower-than 10000  # 10ms
+CONFIG SET slowlog-max-len 128
+
+# View slow queries
+SLOWLOG GET 10
+```
+
+<Warning>
+`KEYS *` pattern matching blocks Redis. Use `SCAN` for production environments:
+
+```bash
+# BAD: blocks server
+KEYS user:*
+
+# GOOD: iterative scan
+SCAN 0 MATCH user:* COUNT 100
+```
+</Warning>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Do: Set explicit TTLs on all cache entries">
+    - Never cache without expiration (except explicitly persistent data)
+    - Add jitter to TTLs: `ttl = base + random(0, jitter)`
+    - Shorter TTLs for frequently changing data, longer for stable data
+  </Accordion>
+  
+  <Accordion title="Do: Monitor cache hit rate per namespace">
+    - Alert when hit rate drops below 50-60%
+    - Low hit rate indicates poor key design or inappropriate caching
+    - Use Redis `INFO` or application-level instrumentation
+  </Accordion>
+  
+  <Accordion title="Don't: Cache data that changes on every request">
+    - Timestamps, request IDs, nonces have 0% hit rate
+    - Caching adds latency without benefit
+    - Cache only data with read:write ratio > 3:1
+  </Accordion>
+  
+  <Accordion title="Don't: Store large objects (>100KB) in cache">
+    - Network transfer latency negates cache benefit
+    - Fragments memory, causes evictions
+    - Store reference (S3 key) instead of full blob
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Databases" icon="database" href="/system-design/databases">
+    Optimize database queries to reduce cache dependency
+  </Card>
+  
+  <Card title="Load Balancing" icon="scale-balanced" href="/system-design/load-balancing">
+    Use consistent hashing for cache tier load balancing
+  </Card>
+  
+  <Card title="Scalability" icon="chart-line" href="/system-design/scalability">
+    Learn how caching enables horizontal scaling
+  </Card>
+  
+  <Card title="Availability" icon="shield-check" href="/system-design/availability-patterns">
+    Design for cache failure scenarios and graceful degradation
+  </Card>
+</CardGroup>

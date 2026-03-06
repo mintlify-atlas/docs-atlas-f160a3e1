@@ -1,0 +1,529 @@
+---
+title: Database Design & Optimization
+description: SQL vs NoSQL trade-offs, sharding strategies, indexing, and query optimization
+---
+
+## SQL vs NoSQL
+
+Choose SQL when data is relational, consistency is critical, and queries are ad-hoc. Choose NoSQL when access patterns are specific and predictable, horizontal write scalability is required, or data shape is inherently non-relational.
+
+### Decision Framework
+
+```text
+// Use SQL (PostgreSQL) when:
+→ Complex joins and ad-hoc queries
+→ ACID multi-table transactions required
+→ Schema is stable, well-understood
+
+// Use NoSQL when:
+→ Write throughput > single-node SQL capacity
+→ Access pattern is key-value, range, or time-series
+→ Data is documents, graphs, or IoT streams
+```
+
+<CardGroup cols={2}>
+  <Card title="SQL Databases" icon="table">
+    **Strengths**:
+    - ACID transactions
+    - Joins and foreign keys
+    - Schema enforcement
+    - Mature tooling and ecosystem
+    
+    **Examples**: PostgreSQL, MySQL, SQL Server
+    
+    **Use for**: Financial transactions, inventory, user accounts
+  </Card>
+  
+  <Card title="NoSQL Databases" icon="database">
+    **Strengths**:
+    - Horizontal write scalability
+    - Flexible schema
+    - Access-pattern optimized
+    - High throughput
+    
+    **Types**: Key-value (Redis), Document (MongoDB), Wide-column (Cassandra), Graph (Neo4j)
+    
+    **Use for**: Caching, sessions, logs, metrics, social graphs
+  </Card>
+</CardGroup>
+
+<Note>
+Start with PostgreSQL — it handles relational, JSONB, full-text search, and time-series workloads natively. Add specialized stores only when PostgreSQL becomes the proven bottleneck.
+</Note>
+
+### NoSQL Database Types
+
+<Tabs>
+  <Tab title="Key-Value">
+    **Pattern**: `GET key → value`
+    
+    **Examples**: Redis, DynamoDB, Memcached
+    
+    **Best for**:
+    - Session storage
+    - Cache layer
+    - Rate limiting counters
+    - Real-time leaderboards
+    
+    ```bash
+    # Redis examples
+    SET user:1001:session "jwt_token_here" EX 3600
+    GET user:1001:session
+    INCR rate_limit:user:1001
+    ZADD leaderboard 9500 "player123"
+    ```
+  </Tab>
+  
+  <Tab title="Document">
+    **Pattern**: Store JSON documents with flexible schema
+    
+    **Examples**: MongoDB, CouchDB, DynamoDB
+    
+    **Best for**:
+    - Product catalogs
+    - User profiles
+    - Content management
+    - Event logging
+    
+    ```javascript
+    // MongoDB document
+    db.products.insertOne({
+      _id: "prod_123",
+      name: "Laptop",
+      specs: {
+        cpu: "M2",
+        ram: "16GB"
+      },
+      tags: ["electronics", "computers"],
+      price: 1299.99
+    });
+    ```
+  </Tab>
+  
+  <Tab title="Wide-Column">
+    **Pattern**: Column-family storage optimized for write-heavy workloads
+    
+    **Examples**: Cassandra, HBase, ScyllaDB
+    
+    **Best for**:
+    - Time-series data
+    - IoT sensor data
+    - Write-heavy analytics
+    - Distributed logs
+    
+    ```sql
+    -- Cassandra schema
+    CREATE TABLE sensor_data (
+      sensor_id UUID,
+      timestamp TIMESTAMP,
+      temperature FLOAT,
+      humidity FLOAT,
+      PRIMARY KEY ((sensor_id), timestamp)
+    ) WITH CLUSTERING ORDER BY (timestamp DESC);
+    ```
+  </Tab>
+  
+  <Tab title="Graph">
+    **Pattern**: Nodes and edges for relationship-heavy data
+    
+    **Examples**: Neo4j, Amazon Neptune, ArangoDB
+    
+    **Best for**:
+    - Social networks
+    - Recommendation engines
+    - Fraud detection
+    - Knowledge graphs
+    
+    ```cypher
+    // Neo4j query: find friends of friends
+    MATCH (user:Person {name: "Alice"})
+      -[:FRIEND]->(friend)
+      -[:FRIEND]->(fof)
+    WHERE NOT (user)-[:FRIEND]->(fof)
+    RETURN fof.name, COUNT(*) as mutual
+    ORDER BY mutual DESC;
+    ```
+  </Tab>
+</Tabs>
+
+### NewSQL: Best of Both Worlds
+
+**NewSQL** databases (CockroachDB, Google Spanner, YugabyteDB) provide SQL semantics with NoSQL horizontal write scalability:
+
+```sql
+-- CockroachDB: distributed SQL with automatic sharding
+CREATE TABLE orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  total DECIMAL(10,2),
+  created_at TIMESTAMP DEFAULT now()
+);
+
+-- Automatically distributed across nodes
+-- ACID transactions across shards
+-- SQL interface with joins
+```
+
+<Tip>
+Consider NewSQL when you need SQL semantics (joins, transactions) but have outgrown single-node write capacity. Trade-off: increased latency for distributed consensus.
+</Tip>
+
+## SQL Query Optimization
+
+### EXPLAIN ANALYZE
+
+The primary tuning tool for understanding query execution:
+
+```sql
+-- Before optimization
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM orders WHERE user_id = 42 ORDER BY created_at DESC LIMIT 10;
+
+-- Output shows:
+Seq Scan on orders  (cost=0.00..45823.00 rows=1000000 width=120)
+  Filter: (user_id = 42)
+  Rows Removed by Filter: 999500
+  Buffers: shared hit=8000 read=12000
+Planning Time: 0.5ms
+Execution Time: 2847.3ms
+```
+
+<Warning>
+Sequential scan with high "Rows Removed by Filter" indicates a missing index. The database is scanning the entire table and discarding most rows.
+</Warning>
+
+### Index Strategy
+
+<Tabs>
+  <Tab title="B-tree Index">
+    Default index type for most use cases:
+    
+    ```sql
+    -- Single-column index
+    CREATE INDEX idx_user_id ON orders(user_id);
+    
+    -- Composite index (order matters!)
+    CREATE INDEX idx_user_status_date 
+      ON orders(user_id, status, created_at DESC);
+    
+    -- Covering index (includes extra columns)
+    CREATE INDEX idx_user_status_date_covering
+      ON orders(user_id, status, created_at DESC)
+      INCLUDE (total, item_count);
+    ```
+    
+    **Column order rules**:
+    1. Equality filters first (`user_id = ?`)
+    2. Range filters next (`created_at > ?`)
+    3. ORDER BY last
+  </Tab>
+  
+  <Tab title="Partial Index">
+    Index only a subset of rows:
+    
+    ```sql
+    -- Only index active orders (90% are completed)
+    CREATE INDEX idx_active_orders 
+      ON orders(user_id, created_at) 
+      WHERE status IN ('pending', 'processing');
+    
+    -- 10x smaller index, faster queries for active orders
+    ```
+    
+    **Benefits**:
+    - Smaller index size
+    - Faster writes (fewer index updates)
+    - Better cache hit rate
+  </Tab>
+  
+  <Tab title="Expression Index">
+    Index on computed expressions:
+    
+    ```sql
+    -- Index for case-insensitive email lookup
+    CREATE INDEX idx_email_lower 
+      ON users(LOWER(email));
+    
+    -- Query must use same expression
+    SELECT * FROM users WHERE LOWER(email) = 'alice@example.com';
+    
+    -- JSONB field index
+    CREATE INDEX idx_metadata_type 
+      ON products((metadata->>'type'));
+    ```
+  </Tab>
+  
+  <Tab title="Full-Text Search">
+    PostgreSQL built-in full-text search:
+    
+    ```sql
+    -- Add tsvector column
+    ALTER TABLE articles 
+      ADD COLUMN search_vector tsvector;
+    
+    -- Update trigger to maintain search vector
+    CREATE TRIGGER articles_search_update
+      BEFORE INSERT OR UPDATE ON articles
+      FOR EACH ROW EXECUTE FUNCTION
+        tsvector_update_trigger(
+          search_vector, 'pg_catalog.english', 
+          title, body
+        );
+    
+    -- GIN index for full-text search
+    CREATE INDEX idx_articles_search 
+      ON articles USING GIN(search_vector);
+    
+    -- Query with ranking
+    SELECT title, 
+      ts_rank(search_vector, query) as rank
+    FROM articles, 
+      to_tsquery('english', 'postgresql & performance') query
+    WHERE search_vector @@ query
+    ORDER BY rank DESC;
+    ```
+  </Tab>
+</Tabs>
+
+### Common Query Anti-Patterns
+
+<AccordionGroup>
+  <Accordion title="N+1 Queries">
+    **Problem**: Loop issuing one query per row
+    
+    ```javascript
+    // BAD: 1 + N queries
+    const orders = await db.all('SELECT * FROM orders');
+    for (const o of orders) {
+      o.user = await db.get(`SELECT * FROM users WHERE id=${o.userId}`);
+    }
+    
+    // GOOD: 1 query with JOIN
+    const orders = await db.all(`
+      SELECT o.*, u.name, u.email
+      FROM orders o
+      JOIN users u ON o.user_id = u.id
+    `);
+    ```
+    
+    **Detection**: APM tools (Datadog, New Relic) show "span repetition" in traces
+  </Accordion>
+  
+  <Accordion title="SELECT *">
+    **Problem**: Fetching unused columns wastes I/O and network bandwidth
+    
+    ```sql
+    -- BAD: fetches 50 columns, uses 2
+    SELECT * FROM users WHERE id = 42;
+    
+    -- GOOD: explicit column list
+    SELECT id, name, email FROM users WHERE id = 42;
+    ```
+    
+    **Impact**: Covering index possible only with explicit columns
+  </Accordion>
+  
+  <Accordion title="Missing WHERE in UPDATE/DELETE">
+    **Problem**: Accidentally modifying all rows
+    
+    ```sql
+    -- DANGEROUS: updates every row!
+    UPDATE orders SET status = 'cancelled';
+    -- Missing: WHERE id = 123
+    
+    -- Safe: always include WHERE
+    UPDATE orders SET status = 'cancelled' WHERE id = 123;
+    ```
+    
+    <Warning>
+    Enable `sql_safe_updates` in MySQL or use transactions with explicit commit to prevent accidental bulk modifications.
+    </Warning>
+  </Accordion>
+  
+  <Accordion title="Implicit Type Conversion">
+    **Problem**: WHERE clause type mismatch prevents index usage
+    
+    ```sql
+    -- BAD: user_id is INT, comparing to STRING
+    SELECT * FROM orders WHERE user_id = '42';
+    -- Forces sequential scan!
+    
+    -- GOOD: matching types
+    SELECT * FROM orders WHERE user_id = 42;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Database Maintenance
+
+```sql
+-- Vacuum and analyze (PostgreSQL)
+-- Reclaim space and update query planner statistics
+VACUUM ANALYZE orders;
+
+-- Auto-vacuum configuration
+ALTER TABLE orders SET (
+  autovacuum_vacuum_scale_factor = 0.05,
+  autovacuum_analyze_scale_factor = 0.02
+);
+
+-- Reindex (rebuild indexes to remove bloat)
+REINDEX INDEX CONCURRENTLY idx_user_id;
+
+-- Check index usage
+SELECT schemaname, tablename, indexname, idx_scan, idx_tup_read
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0
+  AND indexname NOT LIKE 'pg_toast%'
+ORDER BY pg_relation_size(indexrelid) DESC;
+```
+
+<Tip>
+Run `VACUUM ANALYZE` regularly on write-heavy tables. Stale statistics cause the query planner to choose suboptimal execution plans.
+</Tip>
+
+## Connection Pooling
+
+Database connections are expensive. Connection poolers sit between application and database:
+
+<Tabs>
+  <Tab title="PgBouncer">
+    Lightweight connection pooler for PostgreSQL:
+    
+    ```ini
+    # pgbouncer.ini
+    [databases]
+    mydb = host=postgres port=5432 dbname=production
+    
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 6432
+    auth_type = md5
+    auth_file = /etc/pgbouncer/userlist.txt
+    
+    # Pool settings
+    pool_mode = transaction        # or session, statement
+    max_client_conn = 10000       # app can have 10k connections
+    default_pool_size = 25        # but only 25 to PostgreSQL
+    reserve_pool_size = 5
+    reserve_pool_timeout = 3
+    ```
+    
+    **Pool modes**:
+    - `session`: connection held for entire client session
+    - `transaction`: connection returned after each transaction (recommended)
+    - `statement`: connection returned after each statement (breaks transactions)
+  </Tab>
+  
+  <Tab title="HikariCP (Java)">
+    High-performance JDBC connection pool:
+    
+    ```java
+    HikariConfig config = new HikariConfig();
+    config.setJdbcUrl("jdbc:postgresql://localhost:5432/mydb");
+    config.setUsername("user");
+    config.setPassword("pass");
+    
+    // Pool sizing: connections = ((core_count * 2) + effective_spindle_count)
+    config.setMaximumPoolSize(20);
+    config.setMinimumIdle(5);
+    
+    // Connection lifetime
+    config.setMaxLifetime(1800000);      // 30 min
+    config.setConnectionTimeout(30000);  // 30 sec
+    config.setIdleTimeout(600000);       // 10 min
+    
+    // Health check
+    config.setConnectionTestQuery("SELECT 1");
+    
+    HikariDataSource ds = new HikariDataSource(config);
+    ```
+  </Tab>
+  
+  <Tab title="Sizing Guide">
+    **Formula**: 
+    ```text
+    connections = ((core_count * 2) + effective_spindle_count)
+    ```
+    
+    For SSD (spindle count ≈ 1):
+    - 4 cores: ~10 connections
+    - 8 cores: ~20 connections
+    - 16 cores: ~30 connections
+    
+    <Warning>
+    More connections ≠ better performance. Excessive connections cause context switching overhead and degrade throughput.
+    </Warning>
+    
+    **Monitoring**:
+    ```sql
+    -- PostgreSQL active connections
+    SELECT count(*) FROM pg_stat_activity 
+    WHERE state = 'active';
+    
+    -- Connection limit
+    SHOW max_connections;
+    ```
+  </Tab>
+</Tabs>
+
+## Polyglot Persistence
+
+Use specialized databases for specific access patterns:
+
+```text
+// Typical microservice data architecture
+┌─────────────────┐
+│  API Gateway    │
+└────────┬────────┘
+         │
+    ┌────┴─────┬─────────┬──────────┐
+    │          │         │          │
+┌───▼────┐ ┌──▼───┐ ┌──▼────┐ ┌───▼─────┐
+│ Users  │ │Orders│ │Product│ │Analytics│
+│Service │ │Service│ │Service│ │ Service │
+└───┬────┘ └──┬───┘ └──┬────┘ └───┬─────┘
+    │          │         │          │
+┌───▼────┐ ┌──▼───┐ ┌──▼────┐ ┌───▼─────┐
+│Postgres│ │Postgres│Elastic│ │ClickHouse│
+│        │ │      │ │Search │ │ (OLAP)  │
+└────────┘ └──────┘ └───────┘ └─────────┘
+     │          │
+     └────┬─────┘
+          │
+     ┌────▼────┐
+     │  Redis  │  (shared cache + sessions)
+     └─────────┘
+```
+
+### When to Add Specialized Stores
+
+- **Elasticsearch**: Full-text search, log aggregation, analytics
+- **Redis**: Caching, sessions, rate limiting, real-time leaderboards
+- **ClickHouse**: OLAP analytics, time-series aggregation
+- **S3/Object Storage**: Binary files, backups, data lake
+- **Neo4j**: Graph traversal, recommendations
+
+<Note>
+Each additional database type adds operational complexity. Add specialized stores only when PostgreSQL + proper indexing is insufficient for that specific access pattern.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Caching" icon="bolt" href="/system-design/caching">
+    Reduce database load with multi-layer caching strategies
+  </Card>
+  
+  <Card title="Scalability" icon="chart-line" href="/system-design/scalability">
+    Learn about sharding, replication, and horizontal scaling
+  </Card>
+  
+  <Card title="Load Balancing" icon="scale-balanced" href="/system-design/load-balancing">
+    Distribute database reads across replicas effectively
+  </Card>
+  
+  <Card title="Availability" icon="shield-check" href="/system-design/availability-patterns">
+    High availability through replication and failover
+  </Card>
+</CardGroup>

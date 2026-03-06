@@ -1,122 +1,104 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Developer Knowledge Base",
+  "theme": "sequoia",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#6b21a8",
+    "light": "#a855f7",
+    "dark": "#581c87"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/anandstays-creator/KnowledgeBase"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/anandstays-creator/KnowledgeBase"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Programming",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
+            "pages": ["introduction"]
+          },
+          {
+            "group": "C# Fundamentals",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "csharp/overview",
+              "csharp/syntax-basics",
+              "csharp/data-types",
+              "csharp/control-flow",
+              "csharp/methods-functions"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Advanced C#",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "advanced-csharp/oop-principles",
+              "advanced-csharp/memory-management",
+              "advanced-csharp/generics",
+              "advanced-csharp/delegates-events",
+              "advanced-csharp/reflection-attributes",
+              "advanced-csharp/async-programming"
             ]
           },
           {
-            "group": "Writing content",
+            "group": ".NET Framework",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
-          },
-          {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "dotnet/clr-runtime",
+              "dotnet/linq",
+              "dotnet/collections",
+              "dotnet/web-development",
+              "dotnet/desktop-apps",
+              "dotnet/deployment"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "Cloud & Architecture",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Azure Certification",
             "pages": [
-              "api-reference/introduction"
+              "azure/az-204-overview",
+              "azure/compute-services",
+              "azure/storage-solutions",
+              "azure/security-identity",
+              "azure/cloud-integration",
+              "azure/monitoring-logging"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "System Design",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "system-design/fundamentals",
+              "system-design/scalability",
+              "system-design/databases",
+              "system-design/caching",
+              "system-design/load-balancing",
+              "system-design/availability-patterns"
+            ]
+          },
+          {
+            "group": "Software Architecture",
+            "pages": [
+              "architecture/principles",
+              "architecture/design-patterns",
+              "architecture/architectural-styles",
+              "architecture/api-design",
+              "architecture/security-practices",
+              "architecture/enterprise-integration"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

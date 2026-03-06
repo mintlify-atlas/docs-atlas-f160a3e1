@@ -1,0 +1,704 @@
+---
+title: C# Control Flow
+description: Master conditional statements, loops, and control flow patterns in C#
+---
+
+# Control Flow in C#
+
+Control flow statements determine the order in which code executes. C# provides powerful constructs for conditional logic, iteration, and flow control.
+
+## Conditional Statements
+
+### If-Else Statements
+
+The foundation of conditional logic:
+
+```csharp
+int age = 25;
+
+// Simple if
+if (age >= 18)
+{
+    Console.WriteLine("Adult");
+}
+
+// If-else
+if (age >= 18)
+{
+    Console.WriteLine("Adult");
+}
+else
+{
+    Console.WriteLine("Minor");
+}
+
+// If-else-if ladder
+if (age < 13)
+{
+    Console.WriteLine("Child");
+}
+else if (age < 18)
+{
+    Console.WriteLine("Teenager");
+}
+else if (age < 65)
+{
+    Console.WriteLine("Adult");
+}
+else
+{
+    Console.WriteLine("Senior");
+}
+```
+
+<Tip>
+For single-line conditional statements, braces are optional but recommended for clarity and preventing bugs:
+
+```csharp
+// Works but not recommended
+if (condition) DoSomething();
+
+// Better - clear and safe
+if (condition)
+{
+    DoSomething();
+}
+```
+</Tip>
+
+### Ternary Operator
+
+Concise syntax for simple conditionals:
+
+```csharp
+int age = 20;
+
+// Ternary: condition ? ifTrue : ifFalse
+string status = age >= 18 ? "Adult" : "Minor";
+
+// Nested ternary (use sparingly)
+string category = age < 13 ? "Child" 
+                : age < 18 ? "Teen" 
+                : age < 65 ? "Adult" 
+                : "Senior";
+
+// With method calls
+int max = a > b ? a : b;
+Console.WriteLine(isValid ? "Valid" : "Invalid");
+```
+
+### Switch Statements
+
+Traditional switch for multiple conditions:
+
+```csharp
+int dayOfWeek = 3;
+
+switch (dayOfWeek)
+{
+    case 1:
+        Console.WriteLine("Monday");
+        break;
+    case 2:
+        Console.WriteLine("Tuesday");
+        break;
+    case 3:
+        Console.WriteLine("Wednesday");
+        break;
+    case 4:
+    case 5:
+        Console.WriteLine("Midweek day");
+        break;
+    default:
+        Console.WriteLine("Weekend or invalid");
+        break;
+}
+```
+
+<Warning>
+Always include `break` statements in switch cases. C# does not allow fall-through to the next case (unlike C/C++), except for empty cases:
+
+```csharp
+switch (value)
+{
+    case 1:
+    case 2:  // Empty case - fall-through allowed
+        Console.WriteLine("One or Two");
+        break;
+    case 3:
+        Console.WriteLine("Three");
+        // Missing break - compile error!
+}
+```
+</Warning>
+
+### Switch Expressions (C# 8.0+)
+
+Modern, concise pattern matching:
+
+```csharp
+// Basic switch expression
+string dayName = dayOfWeek switch
+{
+    1 => "Monday",
+    2 => "Tuesday",
+    3 => "Wednesday",
+    4 => "Thursday",
+    5 => "Friday",
+    6 => "Saturday",
+    7 => "Sunday",
+    _ => "Invalid"  // Discard pattern (default)
+};
+
+// With ranges (C# 9.0+)
+string ageGroup = age switch
+{
+    < 13 => "Child",
+    >= 13 and < 18 => "Teenager",
+    >= 18 and < 65 => "Adult",
+    >= 65 => "Senior",
+    _ => "Unknown"
+};
+
+// Type patterns
+string description = obj switch
+{
+    int i => $"Integer: {i}",
+    string s => $"String: {s}",
+    null => "Null value",
+    _ => "Unknown type"
+};
+
+// Property patterns
+decimal discount = customer switch
+{
+    { IsVip: true } => 0.20m,
+    { YearsActive: > 5 } => 0.15m,
+    { YearsActive: > 2 } => 0.10m,
+    _ => 0.05m
+};
+```
+
+<Note>
+Switch expressions must be exhaustive - they must handle all possible values or include a discard pattern `_`.
+</Note>
+
+## Iteration Statements
+
+### For Loop
+
+Classic counter-based iteration:
+
+```csharp
+// Standard for loop
+for (int i = 0; i < 10; i++)
+{
+    Console.WriteLine(i);
+}
+
+// Multiple variables
+for (int i = 0, j = 10; i < j; i++, j--)
+{
+    Console.WriteLine($"{i}, {j}");
+}
+
+// Reverse iteration
+for (int i = 10; i >= 0; i--)
+{
+    Console.WriteLine(i);
+}
+
+// Infinite loop (break needed)
+for (;;)
+{
+    if (ShouldStop()) break;
+    DoWork();
+}
+```
+
+### Foreach Loop
+
+Iterating over collections:
+
+```csharp
+string[] names = { "Alice", "Bob", "Charlie" };
+
+// Foreach over array
+foreach (string name in names)
+{
+    Console.WriteLine(name);
+}
+
+// Foreach over List
+List<int> numbers = new() { 1, 2, 3, 4, 5 };
+foreach (int num in numbers)
+{
+    Console.WriteLine(num);
+}
+
+// With type inference
+foreach (var item in collection)
+{
+    Console.WriteLine(item);
+}
+
+// Foreach with index (LINQ)
+foreach (var (item, index) in items.Select((value, i) => (value, i)))
+{
+    Console.WriteLine($"[{index}] {item}");
+}
+```
+
+<Tip>
+Use `foreach` for readability when you don't need the index. Use `for` when you need the index or need to modify the collection:
+
+```csharp
+// Foreach - cleaner for reading
+foreach (var item in items)
+{
+    Console.WriteLine(item);
+}
+
+// For - needed for modification by index
+for (int i = 0; i < items.Length; i++)
+{
+    items[i] = items[i] * 2;
+}
+```
+</Tip>
+
+### While Loop
+
+Condition-based iteration:
+
+```csharp
+int count = 0;
+
+// While loop - check condition first
+while (count < 10)
+{
+    Console.WriteLine(count);
+    count++;
+}
+
+// Processing until condition
+string? line;
+while ((line = Console.ReadLine()) != null)
+{
+    Console.WriteLine($"Echo: {line}");
+}
+
+// While with complex condition
+while (IsConnected() && !cancellationToken.IsCancellationRequested)
+{
+    ProcessMessage();
+}
+```
+
+### Do-While Loop
+
+Executes at least once:
+
+```csharp
+int input;
+
+// Do-while - execute first, check after
+do
+{
+    Console.Write("Enter a number (0 to exit): ");
+    input = int.Parse(Console.ReadLine());
+    Console.WriteLine($"You entered: {input}");
+}
+while (input != 0);
+
+// Menu system
+char choice;
+do
+{
+    DisplayMenu();
+    choice = Console.ReadKey().KeyChar;
+    ProcessChoice(choice);
+}
+while (choice != 'q');
+```
+
+## Jump Statements
+
+### Break Statement
+
+Exit from a loop or switch:
+
+```csharp
+// Break out of loop
+for (int i = 0; i < 100; i++)
+{
+    if (i == 50)
+        break;  // Exit loop at 50
+    Console.WriteLine(i);
+}
+
+// Break from nested loop
+for (int i = 0; i < 10; i++)
+{
+    for (int j = 0; j < 10; j++)
+    {
+        if (i * j > 50)
+            break;  // Only breaks inner loop
+        Console.WriteLine($"{i} * {j} = {i * j}");
+    }
+}
+
+// Using flag for nested break
+bool found = false;
+for (int i = 0; i < 10 && !found; i++)
+{
+    for (int j = 0; j < 10; j++)
+    {
+        if (array[i, j] == target)
+        {
+            found = true;
+            break;
+        }
+    }
+}
+```
+
+### Continue Statement
+
+Skip to next iteration:
+
+```csharp
+// Skip even numbers
+for (int i = 1; i <= 10; i++)
+{
+    if (i % 2 == 0)
+        continue;  // Skip rest of loop body
+    Console.WriteLine(i);  // Only prints odd numbers
+}
+
+// Skip invalid items
+foreach (var item in items)
+{
+    if (item == null || !item.IsValid)
+        continue;
+    
+    ProcessItem(item);
+}
+```
+
+### Return Statement
+
+Exit from a method:
+
+```csharp
+public int FindIndex(int[] array, int target)
+{
+    for (int i = 0; i < array.Length; i++)
+    {
+        if (array[i] == target)
+            return i;  // Exit method immediately
+    }
+    return -1;  // Not found
+}
+
+// Early return for validation
+public void ProcessOrder(Order order)
+{
+    if (order == null)
+        return;  // Early exit
+    
+    if (!order.IsValid)
+        return;  // Guard clause
+    
+    // Main processing logic
+    order.Process();
+}
+```
+
+### Goto Statement (Use Rarely)
+
+```csharp
+// Goto - generally discouraged
+for (int i = 0; i < 10; i++)
+{
+    for (int j = 0; j < 10; j++)
+    {
+        if (Found(i, j))
+            goto found;  // Jump to label
+    }
+}
+
+found:
+Console.WriteLine("Item found");
+```
+
+<Warning>
+Avoid `goto` in most cases. Use structured control flow (return, break, continue) instead. The only acceptable use case is breaking out of nested loops when a flag or extraction to a method would be more complex.
+</Warning>
+
+## Pattern Matching
+
+### Type Patterns
+
+```csharp
+object value = GetValue();
+
+// Traditional type check
+if (value is string)
+{
+    string s = (string)value;
+    Console.WriteLine(s.ToUpper());
+}
+
+// Pattern matching with declaration
+if (value is string s)
+{
+    Console.WriteLine(s.ToUpper());
+}
+
+// Switch with type patterns
+string result = value switch
+{
+    int i => $"Integer: {i}",
+    string s => $"String: {s}",
+    double d => $"Double: {d:F2}",
+    null => "Null",
+    _ => "Unknown"
+};
+```
+
+### Property Patterns
+
+```csharp
+public record Person(string Name, int Age, string Country);
+
+Person person = GetPerson();
+
+// Property pattern matching
+if (person is { Age: >= 18, Country: "USA" })
+{
+    Console.WriteLine("Eligible to vote in USA");
+}
+
+// Switch with property patterns
+string description = person switch
+{
+    { Age: < 18 } => "Minor",
+    { Age: >= 18 and < 65 } => "Adult",
+    { Age: >= 65 } => "Senior",
+    _ => "Unknown"
+};
+
+// Nested property patterns
+if (order is { Customer: { IsVip: true }, Total: > 1000 })
+{
+    ApplyVipDiscount(order);
+}
+```
+
+### Relational Patterns (C# 9.0+)
+
+```csharp
+int score = 85;
+
+// Relational patterns
+string grade = score switch
+{
+    >= 90 => "A",
+    >= 80 and < 90 => "B",
+    >= 70 and < 80 => "C",
+    >= 60 and < 70 => "D",
+    < 60 => "F"
+};
+
+// Combining patterns
+string status = (age, hasLicense) switch
+{
+    (< 16, _) => "Too young to drive",
+    (>= 16, true) => "Can drive",
+    (>= 16, false) => "Need license",
+    _ => "Unknown"
+};
+```
+
+## Exception Handling
+
+### Try-Catch-Finally
+
+```csharp
+try
+{
+    // Code that might throw exceptions
+    int result = int.Parse(userInput);
+    int division = 100 / result;
+    Console.WriteLine(division);
+}
+catch (FormatException ex)
+{
+    // Handle specific exception type
+    Console.WriteLine($"Invalid format: {ex.Message}");
+}
+catch (DivideByZeroException ex)
+{
+    Console.WriteLine($"Cannot divide by zero: {ex.Message}");
+}
+catch (Exception ex)
+{
+    // Catch all other exceptions
+    Console.WriteLine($"Error: {ex.Message}");
+    throw;  // Re-throw to preserve stack trace
+}
+finally
+{
+    // Always executes (cleanup code)
+    Console.WriteLine("Cleanup complete");
+}
+```
+
+### Exception Filters (C# 6.0+)
+
+```csharp
+try
+{
+    ProcessRequest(request);
+}
+catch (HttpException ex) when (ex.StatusCode == 404)
+{
+    Console.WriteLine("Resource not found");
+}
+catch (HttpException ex) when (ex.StatusCode == 500)
+{
+    Console.WriteLine("Server error");
+    LogError(ex);
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Unexpected error: {ex.Message}");
+}
+```
+
+### Throwing Exceptions
+
+```csharp
+public void ProcessAge(int age)
+{
+    // Throw with message
+    if (age < 0)
+        throw new ArgumentException("Age cannot be negative", nameof(age));
+    
+    // Throw specific exception type
+    if (age > 150)
+        throw new ArgumentOutOfRangeException(nameof(age), age, "Age is unrealistic");
+    
+    // Process age...
+}
+
+// Throw expressions (C# 7.0+)
+public string Name
+{
+    get => _name;
+    set => _name = value ?? throw new ArgumentNullException(nameof(value));
+}
+
+// With null-coalescing
+string name = input ?? throw new ArgumentNullException(nameof(input));
+```
+
+## Best Practices
+
+<Accordion title="Use early returns for validation (guard clauses)">
+```csharp
+// Bad - nested conditions
+public void Process(Order order)
+{
+    if (order != null)
+    {
+        if (order.IsValid)
+        {
+            if (order.Total > 0)
+            {
+                // Process order
+            }
+        }
+    }
+}
+
+// Good - early returns
+public void Process(Order order)
+{
+    if (order == null) return;
+    if (!order.IsValid) return;
+    if (order.Total <= 0) return;
+    
+    // Process order - flat structure
+    order.Process();
+}
+```
+</Accordion>
+
+<Accordion title="Prefer switch expressions over statements">
+```csharp
+// Old style
+string result;
+switch (value)
+{
+    case 1: result = "One"; break;
+    case 2: result = "Two"; break;
+    default: result = "Other"; break;
+}
+
+// Modern
+string result = value switch
+{
+    1 => "One",
+    2 => "Two",
+    _ => "Other"
+};
+```
+</Accordion>
+
+<Accordion title="Use foreach unless you need the index">
+```csharp
+// Prefer foreach for readability
+foreach (var item in items)
+{
+    Console.WriteLine(item);
+}
+
+// Use for when index is needed
+for (int i = 0; i < items.Length; i++)
+{
+    Console.WriteLine($"[{i}] {items[i]}");
+}
+```
+</Accordion>
+
+<Accordion title="Handle exceptions at the appropriate level">
+```csharp
+// Don't catch and ignore
+try { DoWork(); } catch { }  // BAD!
+
+// Catch specific exceptions
+try
+{
+    DoWork();
+}
+catch (SpecificException ex)
+{
+    Log(ex);
+    // Handle or re-throw
+}
+```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Methods & Functions" href="/csharp/methods-functions">
+    Learn to create and organize methods
+  </Card>
+  
+  <Card title="Data Types" href="/csharp/data-types">
+    Review C#'s type system
+  </Card>
+</CardGroup>

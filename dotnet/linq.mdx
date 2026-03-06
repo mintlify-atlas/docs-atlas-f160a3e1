@@ -1,0 +1,255 @@
+---
+title: LINQ & Data Access
+description: Language Integrated Query for data manipulation, filtering, sorting, grouping, and database access patterns
+---
+
+LINQ (Language Integrated Query) provides a unified syntax for querying sequences, whether they're in-memory collections, databases, or XML documents. LINQ makes data manipulation declarative and type-safe.
+
+## Query Syntax
+
+LINQ query syntax provides a readable, SQL-style DSL for querying sequences. It compiles to method chain calls on `IEnumerable<T>` or `IQueryable<T>`.
+
+```csharp
+var query =
+    from p in products
+    where p.Price > 10
+    orderby p.Name
+    select new { p.Name, p.Price };
+foreach (var item in query) Console.WriteLine(item);
+```
+
+### Query Syntax Elements
+
+- **from** - Selects an iteration variable
+- **where** - Filters elements using any boolean expression
+- **select** - Projects each element to a new shape
+- **orderby** - Supports multiple keys with ascending/descending
+- **join** - Correlates two sequences on a key
+- **group by** - Produces `IGrouping<TKey, TElement>` sequences
+
+<Tip>
+Use query syntax for complex multi-join queries — it is more readable than deeply chained method calls with multiple lambdas.
+</Tip>
+
+## Method Syntax
+
+LINQ method (fluent) syntax chains extension methods on `IEnumerable<T>`. More concise for simple operations and integrates smoothly with async LINQ extensions.
+
+```csharp
+var top5 = orders
+    .Where(o => o.Total > 100)
+    .OrderByDescending(o => o.Total)
+    .Take(5)
+    .Select(o => new { o.Id, o.Total })
+    .ToList();
+```
+
+### Common LINQ Methods
+
+<Tabs>
+  <Tab title="Filtering">
+    - **Where** - Filters with predicate
+    - **OfType&lt;T&gt;** - Filters and casts by type
+    - **Distinct** - Removes duplicates
+    - **Skip/Take** - Pagination support
+  </Tab>
+  <Tab title="Projection">
+    - **Select** - Transforms each element
+    - **SelectMany** - Flattens nested sequences
+    - **Zip** - Combines two sequences element-by-element
+  </Tab>
+  <Tab title="Aggregation">
+    - **Count/Sum/Average/Min/Max** - Aggregate operations
+    - **Aggregate** - General fold operation
+    - **Any/All** - Existence checks
+  </Tab>
+</Tabs>
+
+### Key Points
+
+- All LINQ methods are **lazy by default** — execution deferred until enumeration
+- `ToList()`, `ToArray()`, `ToDictionary()` force immediate evaluation
+- `First()` throws if empty; `FirstOrDefault()` returns default value
+- `SelectMany` flattens nested sequences
+- `Aggregate` is the general fold operation
+
+<Warning>
+Call ToList() or ToArray() once at the terminal operation of a LINQ chain to avoid repeated enumeration of the source sequence.
+</Warning>
+
+## Filtering Data
+
+LINQ filtering operators narrow sequences. EF Core translates them to SQL WHERE and LIMIT clauses.
+
+```csharp
+var active = users
+    .Where((u, i) => u.IsActive && i < 100)
+    .DistinctBy(u => u.Email)
+    .ToList();
+```
+
+### Filtering Operators
+
+- **Where** - Primary filter operator with predicate lambda
+- **OfType&lt;T&gt;** - Filters by type with a cast
+- **Distinct/DistinctBy** - Deduplicates sequences
+- **TakeWhile/SkipWhile** - Operate on ordered sequences
+- **Intersect/Except/Union** - Set-based filters
+- **Chunk** - Splits sequence into fixed-size chunks
+
+<Note>
+Push filters as close to the data source as possible — in EF Core, Where before Select translates to a SQL WHERE, reducing data transfer.
+</Note>
+
+## Sorting Data
+
+`OrderBy`, `OrderByDescending`, `ThenBy`, and `ThenByDescending` compose multi-level sorts.
+
+```csharp
+var sorted = employees
+    .OrderBy(e => e.Department, StringComparer.OrdinalIgnoreCase)
+    .ThenByDescending(e => e.Salary)
+    .ToList();
+```
+
+### Sorting Guidelines
+
+- `OrderBy` must precede `ThenBy` in the chain
+- Multiple `Where` before `OrderBy` is fine — only one `OrderBy` needed
+- Use `StringComparer` overloads for case-insensitive sorts
+- Sorting is stable in LINQ to Objects
+- EF Core translates `OrderBy` to SQL ORDER BY
+
+<Tip>
+For large in-memory datasets, pre-compute sort keys with Select before OrderBy to avoid redundant key evaluations during sort.
+</Tip>
+
+## Grouping Data
+
+`GroupBy` partitions a sequence into `IGrouping<TKey, TElement>` collections.
+
+```csharp
+var summary = orders
+    .GroupBy(o => o.CustomerId)
+    .Select(g => new
+    {
+        CustomerId = g.Key,
+        TotalSpend = g.Sum(o => o.Total),
+        OrderCount = g.Count()
+    }).ToList();
+```
+
+### Grouping Concepts
+
+- `IGrouping<K,V>` implements `IEnumerable<V>` — iterate it like any sequence
+- `Chunk(n)` groups consecutive elements (not keyed grouping)
+- `ToLookup` materializes groups into a dictionary-like structure
+- EF Core translates `GroupBy` to SQL GROUP BY for supported aggregates
+- `GroupJoin` correlates outer and inner sequences like SQL LEFT JOIN
+
+<Note>
+Use ToLookup when you will access groups multiple times — it materializes immediately into an efficient keyed structure.
+</Note>
+
+## Joining Data
+
+LINQ `Join` and `GroupJoin` correlate two sequences on keys. EF Core translates navigation property includes and explicit joins to SQL JOIN clauses.
+
+```csharp
+var results = orders.Join(
+    customers,
+    o => o.CustomerId,
+    c => c.Id,
+    (o, c) => new { o.Total, c.Name }
+).ToList();
+```
+
+### Join Types
+
+<CardGroup cols={2}>
+  <Card title="Inner Join" icon="link">
+    `Join` performs an inner join — only matching keys appear in results
+  </Card>
+  <Card title="Left Join" icon="arrow-right-arrow-left">
+    `GroupJoin` performs a left outer join
+  </Card>
+</CardGroup>
+
+### Join Best Practices
+
+- `Join(inner, outerKey, innerKey, resultSelector)` — four arguments
+- `GroupJoin` returns outer with matching inner collection (left join)
+- `SelectMany` flattens `GroupJoin` to left-join style rows
+- EF Core `Include` eagerly loads navigation properties
+- `ThenInclude` handles nested navigation loading
+
+<Tip>
+In EF Core, prefer navigation properties with Include over manual Join — EF generates more efficient SQL and handles null safety automatically.
+</Tip>
+
+## ADO.NET Fundamentals
+
+ADO.NET provides direct database access via Connection, Command, DataReader, and DataAdapter. It is the foundation beneath all .NET ORMs.
+
+```csharp
+await using var conn = new SqlConnection(_connString);
+await conn.OpenAsync();
+await using var cmd  = conn.CreateCommand();
+cmd.CommandText = "SELECT * FROM Orders WHERE Id = @id";
+cmd.Parameters.AddWithValue("@id", orderId);
+await using var reader = await cmd.ExecuteReaderAsync();
+```
+
+### ADO.NET Key Concepts
+
+- Always open connections inside `using` blocks
+- `DbCommand.Parameters` prevents SQL injection — never concatenate SQL
+- `DataReader` is forward-only, read-only, fast-streaming
+- `CommandType.StoredProcedure` calls database stored procedures
+- `DbTransaction` wraps multiple commands in a unit of work
+- Connection pooling is automatic — avoid unnecessary connection opens
+
+<Warning>
+Always parameterize all queries. Never concatenate user input into SQL strings.
+</Warning>
+
+<Tip>
+Use Dapper for simple CRUD scenarios instead of raw ADO.NET — it maps reader results to typed objects with minimal overhead over ADO.NET.
+</Tip>
+
+## LINQ-to-Objects
+
+LINQ-to-Objects queries `IEnumerable<T>` collections in memory. All standard query operators apply to any sequence: arrays, lists, dictionaries, and custom iterables.
+
+```csharp
+public static IEnumerable<int> Fibonacci()
+{
+    (int a, int b) = (0, 1);
+    while (true) { yield return a; (a, b) = (b, a + b); }
+}
+var first10 = Fibonacci().Take(10).ToList();
+```
+
+### Memory Efficiency
+
+- `yield return` enables lazy generator sequences
+- **PLINQ** (`AsParallel()`) distributes work across CPU cores
+- `ForEach` is not standard LINQ — `List<T>.ForEach` is a List method
+- `Range` and `Repeat` generate numeric/repetition sequences
+- `Enumerable.Empty<T>()` is the canonical empty sequence
+
+<Note>
+Use PLINQ (AsParallel()) for CPU-bound transformations over large in-memory collections — easy 4-8x speedup on multi-core machines.
+</Note>
+
+<CardGroup cols={3}>
+  <Card title="Use yield return" icon="code">
+    For infinite or expensive-to-generate sequences
+  </Card>
+  <Card title="Use PLINQ" icon="gauge-high">
+    For embarrassingly parallel data processing
+  </Card>
+  <Card title="Materialize" icon="database">
+    With ToList before sharing across threads
+  </Card>
+</CardGroup>

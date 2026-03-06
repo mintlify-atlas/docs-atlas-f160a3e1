@@ -1,0 +1,436 @@
+---
+title: C# Syntax Basics
+description: Essential syntax elements including variables, operators, expressions, and naming conventions
+---
+
+# C# Syntax Basics
+
+Understanding C# syntax is fundamental to writing clean, maintainable code. This guide covers variables, operators, expressions, and essential syntax patterns.
+
+## Variables and Declarations
+
+### Variable Declaration
+
+C# requires variables to be declared with a type before use:
+
+```csharp
+// Explicit type declaration
+int age = 30;
+string name = "Alice";
+double price = 99.99;
+bool isActive = true;
+
+// Type inference with var (C# 3.0+)
+var count = 10;           // int
+var message = "Hello";    // string
+var temperature = 98.6;   // double
+```
+
+<Note>
+The `var` keyword uses type inference - the compiler determines the type from the initializer. The variable is still strongly typed.
+</Note>
+
+### Constants
+
+Constants are immutable values declared with `const` or `readonly`:
+
+```csharp
+// Compile-time constant
+const double PI = 3.14159;
+const string CompanyName = "Acme Corp";
+
+// Runtime constant (can be initialized in constructor)
+public class Configuration
+{
+    public readonly string ConnectionString;
+    
+    public Configuration(string connStr)
+    {
+        ConnectionString = connStr;
+    }
+}
+```
+
+<Warning>
+`const` values must be compile-time constants (literals), while `readonly` values can be assigned at runtime in constructors.
+</Warning>
+
+### Nullable Types
+
+C# 8.0+ includes nullable reference types for better null safety:
+
+```csharp
+// Value types - nullable with ?
+int? nullableInt = null;
+double? nullableDouble = 3.14;
+
+// Reference types with nullable context enabled
+string? nullableName = null;   // Can be null
+string nonNullName = "Alice";  // Cannot be null (compiler warning)
+
+// Null checking
+if (nullableInt.HasValue)
+{
+    int value = nullableInt.Value;
+}
+
+// Null-coalescing
+int result = nullableInt ?? 0;  // Use 0 if null
+```
+
+## Operators
+
+### Arithmetic Operators
+
+```csharp
+int a = 10, b = 3;
+
+int sum = a + b;        // 13 - Addition
+int diff = a - b;       // 7  - Subtraction
+int product = a * b;    // 30 - Multiplication
+int quotient = a / b;   // 3  - Division (integer)
+double exact = (double)a / b;  // 3.333... - Floating division
+int remainder = a % b;  // 1  - Modulus
+
+// Increment and decrement
+int x = 5;
+x++;  // Post-increment: use then increment (x = 6)
+++x;  // Pre-increment: increment then use (x = 7)
+x--;  // Post-decrement
+--x;  // Pre-decrement
+```
+
+### Comparison Operators
+
+```csharp
+int x = 10, y = 20;
+
+bool isEqual = x == y;        // false - Equality
+bool notEqual = x != y;       // true  - Inequality
+bool greater = x > y;         // false
+bool less = x < y;            // true
+bool greaterOrEqual = x >= y; // false
+bool lessOrEqual = x <= y;    // true
+```
+
+### Logical Operators
+
+```csharp
+bool a = true, b = false;
+
+bool and = a && b;   // false - Logical AND (short-circuit)
+bool or = a || b;    // true  - Logical OR (short-circuit)
+bool not = !a;       // false - Logical NOT
+bool xor = a ^ b;    // true  - Logical XOR
+
+// Short-circuit evaluation
+if (user != null && user.IsActive)
+{
+    // user.IsActive only evaluated if user != null
+}
+```
+
+<Tip>
+Use `&&` and `||` for short-circuit evaluation - the right operand is only evaluated if necessary. This prevents null reference exceptions.
+</Tip>
+
+### Null-Conditional Operators
+
+C# provides elegant null-checking syntax:
+
+```csharp
+string? name = GetUserName();
+
+// Null-conditional member access
+int? length = name?.Length;  // null if name is null
+
+// Null-coalescing
+string displayName = name ?? "Guest";
+
+// Null-coalescing assignment (C# 8.0+)
+name ??= "Default";  // Assign only if name is null
+
+// Chaining null-conditional operators
+int? count = user?.Profile?.Friends?.Count;
+```
+
+### Assignment Operators
+
+```csharp
+int x = 10;
+
+x += 5;   // x = x + 5  (x = 15)
+x -= 3;   // x = x - 3  (x = 12)
+x *= 2;   // x = x * 2  (x = 24)
+x /= 4;   // x = x / 4  (x = 6)
+x %= 5;   // x = x % 5  (x = 1)
+
+// Null-coalescing assignment
+string? message = null;
+message ??= "Default message";  // Assign if null
+```
+
+## String Operations
+
+### String Interpolation
+
+String interpolation provides readable string formatting:
+
+```csharp
+string name = "Alice";
+int age = 30;
+
+// String interpolation (preferred)
+string message = $"Hello, {name}! You are {age} years old.";
+
+// With expressions
+string info = $"Next year you'll be {age + 1}.";
+
+// Format specifiers
+decimal price = 123.456m;
+string formatted = $"Price: {price:C2}";  // Price: $123.46
+
+// Verbatim interpolated strings
+string path = $@"C:\Users\{name}\Documents";
+```
+
+### String Concatenation
+
+```csharp
+// Concatenation operator
+string full = "Hello" + " " + "World";  // "Hello World"
+
+// String.Concat
+string result = string.Concat("Hello", " ", "World");
+
+// StringBuilder for multiple concatenations
+var builder = new StringBuilder();
+for (int i = 0; i < 1000; i++)
+{
+    builder.Append(i);  // Much faster than string concatenation
+}
+string final = builder.ToString();
+```
+
+<Warning>
+Avoid concatenating strings in loops using `+` operator. Use `StringBuilder` instead - it's orders of magnitude faster for repeated concatenations.
+</Warning>
+
+## Comments and Documentation
+
+### Single-Line and Multi-Line Comments
+
+```csharp
+// This is a single-line comment
+
+int value = 42;  // Inline comment
+
+/*
+ * This is a multi-line comment
+ * Used for longer explanations
+ */
+```
+
+### XML Documentation Comments
+
+XML comments generate IntelliSense documentation:
+
+```csharp
+/// <summary>
+/// Calculates the total price including tax.
+/// </summary>
+/// <param name="basePrice">The base price before tax</param>
+/// <param name="taxRate">The tax rate as a decimal (e.g., 0.08 for 8%)</param>
+/// <returns>The total price with tax included</returns>
+public decimal CalculateTotal(decimal basePrice, decimal taxRate)
+{
+    return basePrice * (1 + taxRate);
+}
+```
+
+## Naming Conventions
+
+C# follows established naming conventions:
+
+### PascalCase
+
+Used for classes, methods, properties, and public members:
+
+```csharp
+public class CustomerService
+{
+    public void ProcessOrder() { }
+    public string CustomerName { get; set; }
+}
+```
+
+### camelCase
+
+Used for local variables, parameters, and private fields:
+
+```csharp
+public class Order
+{
+    private int orderId;        // Private field
+    private string _orderStatus;  // Alternate: leading underscore
+    
+    public void ProcessPayment(decimal paymentAmount)
+    {
+        int transactionId = GetNextId();
+        var confirmationCode = GenerateCode();
+    }
+}
+```
+
+### Interface Names
+
+Interfaces start with 'I':
+
+```csharp
+public interface IRepository { }
+public interface ILogger { }
+public interface IDisposable { }
+```
+
+<Tip>
+Consistent naming conventions make code more readable and maintainable. Follow the established .NET conventions for better collaboration.
+</Tip>
+
+## Code Blocks and Scope
+
+### Block Scope
+
+```csharp
+public void Example()
+{
+    int x = 10;  // Scope: entire method
+    
+    if (x > 5)
+    {
+        int y = 20;  // Scope: only inside if block
+        Console.WriteLine(x + y);
+    }
+    
+    // y is not accessible here - compile error
+    // Console.WriteLine(y);
+}
+```
+
+### Using Declarations (C# 8.0+)
+
+Simplified resource management:
+
+```csharp
+// Traditional using statement
+using (var reader = new StreamReader("file.txt"))
+{
+    string content = reader.ReadToEnd();
+}
+
+// C# 8.0+ using declaration - no braces needed
+using var reader = new StreamReader("file.txt");
+string content = reader.ReadToEnd();
+// Disposed at end of method scope
+```
+
+## Expression-Bodied Members
+
+Concise syntax for simple members (C# 6.0+):
+
+```csharp
+public class Person
+{
+    private string _name;
+    
+    // Expression-bodied method
+    public string GetGreeting() => $"Hello, {_name}!";
+    
+    // Expression-bodied property
+    public string Name
+    {
+        get => _name;
+        set => _name = value ?? throw new ArgumentNullException(nameof(value));
+    }
+    
+    // Read-only property
+    public string DisplayName => $"Mr. {_name}";
+    
+    // Expression-bodied constructor
+    public Person(string name) => _name = name;
+}
+```
+
+## Pattern Matching Basics
+
+Modern C# includes powerful pattern matching:
+
+```csharp
+// Type pattern
+object obj = "Hello";
+if (obj is string s)
+{
+    Console.WriteLine(s.ToUpper());
+}
+
+// Property pattern
+if (person is { Age: >= 18, Country: "USA" })
+{
+    Console.WriteLine("Eligible to vote");
+}
+
+// Switch expression (C# 8.0+)
+string result = value switch
+{
+    0 => "zero",
+    1 => "one",
+    2 => "two",
+    _ => "other"  // Discard pattern (default)
+};
+```
+
+## Best Practices
+
+<Accordion title="Use meaningful variable names">
+```csharp
+// Bad
+int d = 7;
+string s = "John";
+
+// Good
+int daysUntilExpiration = 7;
+string customerName = "John";
+```
+</Accordion>
+
+<Accordion title="Prefer var when type is obvious">
+```csharp
+// Good use of var
+var customer = new Customer();  // Type is obvious
+var orders = GetOrders();       // Return type clear from method name
+
+// Avoid var when type is unclear
+int count = GetCount();  // Better than var - return type not obvious
+```
+</Accordion>
+
+<Accordion title="Use string interpolation over concatenation">
+```csharp
+// Avoid
+string message = "Hello, " + name + "! Your balance is " + balance.ToString();
+
+// Prefer
+string message = $"Hello, {name}! Your balance is {balance:C}";
+```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Data Types" href="/csharp/data-types">
+    Explore C#'s type system in detail
+  </Card>
+  
+  <Card title="Control Flow" href="/csharp/control-flow">
+    Learn about conditionals and loops
+  </Card>
+</CardGroup>

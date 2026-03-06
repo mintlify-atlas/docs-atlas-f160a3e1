@@ -1,0 +1,225 @@
+---
+title: System Design Fundamentals
+description: Core concepts, trade-offs, and principles for building scalable distributed systems
+---
+
+## What is System Design?
+
+System design defines the architecture, components, data flows, and interfaces of a system to satisfy requirements at scale — balancing performance, reliability, and cost trade-offs.
+
+<Note>
+System design bridges requirements and implementation at the architectural level. It demands reasoning simultaneously about performance (latency, throughput), scalability (handling growth), reliability (fault tolerance), and cost. There is rarely one correct answer — every design involves explicit trade-offs with stated justifications.
+</Note>
+
+## Interview Framework
+
+When approaching system design problems, follow this structured process:
+
+```text
+// System Design Interview Framework
+1. Clarify: functional + non-functional requirements
+2. Estimate: scale, storage, bandwidth, RPS
+3. Define: API contracts, data model, core flows
+4. Design: high-level components → deep-dive bottleneck
+5. Trade-offs: state choices and their consequences
+
+// Estimation: 10M users × 5 writes/day
+50M writes/day ÷ 86400 ≈ 578 WPS avg → ~1750 WPS peak
+```
+
+### Key Principles
+
+- **Clarify requirements first**: functional (features) and non-functional (SLAs, scale)
+- **Estimate scale**: users, RPS, data volume, storage, bandwidth — numbers reveal bottlenecks
+- **Back-of-envelope**: 100M DAU × 10 req/day ≈ 12k RPS peak (with 3x buffer)
+- **Identify the primary bottleneck**: CPU, memory, disk I/O, network, or DB connections
+- **Iterate architecture**: start simple (monolith + single DB), add complexity only where proven necessary
+- **CAP theorem, consistency models, and availability patterns** constrain every design decision
+
+<Tip>
+Spend the first 5 minutes in a design interview clarifying requirements before drawing a single box — the best designs solve the stated problem, not an assumed one.
+</Tip>
+
+## Performance vs Scalability
+
+**Performance** is how fast a single request is served. **Scalability** is maintaining performance as concurrent load increases. The two require different strategies and diagnostic tools.
+
+### Understanding the Difference
+
+You cannot always scale away a performance problem, and fast single-request performance does not guarantee scale.
+
+- **Performance metric**: P50/P99 latency for a single request
+- **Scalability metric**: RPS at which latency SLA breaks
+- **Horizontal scaling** (add nodes) works for stateless services — state is the barrier
+- **Vertical scaling** (bigger machine) has a hardware ceiling and a cost cliff
+- **Connection pool exhaustion** is the most common scalability wall in web backends
+
+### Diagnostic Example
+
+```text
+// Performance vs Scalability diagnostic
+Single user P99: 150ms     → performance: OK
+At 1000 RPS:    8000ms    → scalability: BROKEN
+
+// Root cause: DB connection pool exhausted
+max_connections = 100
+app_servers     = 10, threads_each = 50
+// 10×50=500 threads competing for 100 connections
+Fix: PgBouncer connection pooler or reduce thread count
+```
+
+<Warning>
+Connection pool exhaustion manifests as sudden latency spikes under load. Profile before optimizing — the bottleneck is almost never where you expect.
+</Warning>
+
+## Latency vs Throughput
+
+**Latency** is time from request to response. **Throughput** is the number of requests handled per unit time. Optimizing one often degrades the other; Little's Law links them.
+
+### Little's Law
+
+**N = λ × W**: Concurrent requests in flight equals arrival rate times response time.
+
+When latency spikes, concurrent requests balloon, exhausting thread pools and memory.
+
+```text
+// Little's Law: latency spike impact
+Normal: 1000 RPS × 50ms  = 50 concurrent requests
+Spike:  1000 RPS × 500ms = 500 concurrent requests
+// 10× concurrency → likely OOM or cascade timeout
+
+// Throughput vs latency trade-off in Kafka consumer
+fetch.min.bytes=1      // low latency, low throughput
+fetch.min.bytes=1048576 // high throughput, +latency
+```
+
+### Key Concepts
+
+- **P99 latency matters**: the 1% of slow requests drive user churn and support tickets
+- **Throughput** = sustained RPS the system can serve within its latency SLA
+- **Batching**: commit to disk every 100ms (throughput) vs every write (latency)
+- **Streaming vs batch**: real-time pipelines optimize latency; batch jobs optimize throughput
+- **Async I/O** decouples thread count from I/O concurrency — Node.js, Go goroutines, Java virtual threads
+
+<Tip>
+Report P99 latency on dashboards and set SLOs around it — median latency hides the slowest requests that users actually experience as painful.
+</Tip>
+
+## CAP Theorem
+
+CAP Theorem states that a distributed system guarantees at most two of: **Consistency**, **Availability**, and **Partition Tolerance**. Since partitions are unavoidable, systems must choose between C and A when a partition occurs.
+
+<Note>
+Network partitions are inevitable — packets drop, links fail. Every distributed system must choose: refuse to serve stale data (CP) or always serve data that may be stale (AP).
+</Note>
+
+### System Classifications
+
+```text
+// Cassandra: CAP choice per operation
+WRITE: QUORUM  // ⌈N/2⌉+1 nodes confirm → consistent write
+READ:  QUORUM  // read from majority → consistent read
+// N=3: QUORUM=2, tolerates 1 node failure
+
+WRITE: ONE    // 1 node confirms → fast but possibly stale
+READ:  ONE    // may read from lagging replica
+```
+
+### Categories
+
+<CardGroup cols={2}>
+  <Card title="CP Systems" icon="lock">
+    Return error or block during partition to avoid stale reads.
+    
+    **Examples**: PostgreSQL, Zookeeper, etcd, HBase
+    
+    **Use for**: Bank balance, stock reservation, distributed locks
+  </Card>
+  
+  <Card title="AP Systems" icon="circle-check">
+    Return possibly stale data — always available, eventually consistent.
+    
+    **Examples**: Cassandra, CouchDB, DynamoDB
+    
+    **Use for**: Shopping cart, view counters, DNS records
+  </Card>
+</CardGroup>
+
+### PACELC Extension
+
+PACELC extends CAP: even without partition, there is a latency-consistency trade-off on every operation.
+
+- **Cassandra tunable consistency**: QUORUM reads/writes = CP-like; ONE = AP-like per operation
+- **Google Spanner**: achieves external consistency via TrueTime atomic clocks — practical CP at global scale
+
+<Tip>
+Default to AP + eventual consistency, then carve out CP for specific entities where stale reads cause harm. This minimizes the surface area of unavailability.
+</Tip>
+
+## Consistency Patterns
+
+Consistency patterns define when and how data changes become visible across distributed nodes.
+
+### Consistency Levels
+
+| Level | Guarantee | Examples |
+|-------|-----------|----------|
+| **Weak** | No guarantee — best effort | Video streams, VoIP, real-time gaming |
+| **Eventual** | Converges given no new writes | DNS, Cassandra, DynamoDB, S3 |
+| **Strong (Linearizable)** | Reads always reflect latest write | PostgreSQL, Zookeeper, etcd |
+| **Read-your-own-writes** | User sees their own writes | Profile updates, settings |
+| **Monotonic reads** | Once seen, older values never returned | Session consistency |
+| **Bounded staleness** | Eventual with max lag guarantee | Azure Cosmos DB |
+
+### DNS Example: Classic Eventual Consistency
+
+```text
+// DNS: classic eventual consistency
+ns1: A record → 1.2.3.4  (updated)
+ns2: A record → 1.2.3.3  (stale, TTL not expired)
+// Both respond differently — converge after TTL expiry
+
+// DynamoDB consistency options
+ConsistentRead: false → eventually consistent (half cost)
+ConsistentRead: true  → strongly consistent  (full cost)
+```
+
+<Warning>
+Eventual consistency is a provable guarantee of convergence, not "sometimes consistent." The design question is: what is the acceptable staleness window for this specific data?
+</Warning>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Do: Design per entity consistency requirements">
+    - Use strong consistency for money, inventory levels, and auth tokens
+    - Use eventual consistency with idempotency keys for user-generated content
+    - Document CAP choices per service in Architecture Decision Records
+  </Accordion>
+  
+  <Accordion title="Don't: Apply one consistency model globally">
+    - Don't use AP for financial transactions or inventory reservations
+    - Don't use CP for social media likes, view counts, or feed caching
+    - Don't ignore replication lag monitoring in eventually consistent systems
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Scalability" icon="chart-line" href="/system-design/scalability">
+    Learn about horizontal scaling, sharding, and load distribution
+  </Card>
+  
+  <Card title="Databases" icon="database" href="/system-design/databases">
+    Deep dive into SQL vs NoSQL, sharding, and optimization
+  </Card>
+  
+  <Card title="Caching" icon="bolt" href="/system-design/caching">
+    Explore caching strategies and multi-layer cache architecture
+  </Card>
+  
+  <Card title="Load Balancing" icon="scale-balanced" href="/system-design/load-balancing">
+    Understand traffic distribution and load balancing algorithms
+  </Card>
+</CardGroup>

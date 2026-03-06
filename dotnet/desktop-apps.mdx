@@ -1,0 +1,292 @@
+---
+title: Desktop Application Development
+description: Building desktop applications with WPF and WinForms - XAML, data binding, MVVM pattern, and UI layouts
+---
+
+Windows Presentation Foundation (WPF) and Windows Forms (WinForms) are the primary frameworks for building Windows desktop applications in .NET. WPF uses XAML for declarative UI definition and provides powerful data binding capabilities.
+
+## XAML Markup
+
+XAML is an XML-based markup language for defining WPF and MAUI UI layouts. It separates visual design from code-behind logic.
+
+```xml
+<Button Content="Save"
+        Command="{Binding SaveCommand}"
+        Style="{StaticResource PrimaryButton}"
+        IsEnabled="{Binding CanSave}"/>
+```
+
+### XAML Features
+
+- **x:Name** - Assigns a code-behind field reference to an element
+- **StaticResource** - Reference resource dictionaries at compile time
+- **DynamicResource** - Reference resources that can change at runtime
+- **Markup extensions** - `{Binding}`, `{StaticResource}`, `{x:Type}`
+- **x:DataType** - Enables compile-time binding in .NET MAUI
+- **Styles** - Define reusable property sets applied by TargetType
+- **DataTemplate** - Define visual structure for data objects in ItemsControl
+
+<Tip>
+Extract repeated styles into ResourceDictionary files merged in App.xaml — this acts as a design system and ensures visual consistency.
+</Tip>
+
+### XAML Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check">
+    - Keep XAML declarative — move logic to ViewModel
+    - Use ResourceDictionary for shared styles and templates
+    - Use x:DataType for compile-time binding safety in MAUI
+  </Card>
+  <Card title="Don't" icon="xmark">
+    - Put business logic in XAML code-behind
+    - Create deeply nested XAML hierarchies (>5 levels)
+  </Card>
+</CardGroup>
+
+## Data Binding
+
+WPF/MAUI data binding connects UI controls to ViewModel properties. Two-way binding keeps model and view synchronized without manual synchronization code.
+
+```csharp
+public class OrderVm : INotifyPropertyChanged
+{
+    private decimal _total;
+    public decimal Total
+    {
+        get => _total;
+        set { _total = value; OnPropertyChanged(); }
+    }
+    public event PropertyChangedEventHandler? PropertyChanged;
+    void OnPropertyChanged([CallerMemberName] string? n = null)
+        => PropertyChanged?.Invoke(this, new(n));
+}
+```
+
+### Binding Fundamentals
+
+- **DataContext** - Inherited down the visual tree
+- **INotifyPropertyChanged** - Signals the UI of property changes
+- **ObservableCollection&lt;T&gt;** - For bindable lists in MVVM
+- **Binding Modes** - OneWay, TwoWay, OneWayToSource, OneTime
+- **StringFormat** - `{Binding Price, StringFormat={0:C2}}`
+- **ValueConverter** - Converts between model type and UI representation
+
+<Tip>
+Use CommunityToolkit.Mvvm source generators — [ObservableProperty] and [RelayCommand] generate the INotifyPropertyChanged boilerplate at compile time.
+</Tip>
+
+### Value Converters
+
+Convert data between model and view representations:
+
+```csharp
+public class BoolToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => (bool)value ? Visibility.Visible : Visibility.Collapsed;
+    
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => (Visibility)value == Visibility.Visible;
+}
+```
+
+## Commands
+
+`ICommand` decouples UI interactions from logic. `RelayCommand` and `AsyncRelayCommand` enable binding button clicks to ViewModel methods.
+
+```csharp
+[RelayCommand(CanExecute = nameof(CanSave))]
+private async Task SaveAsync()
+{
+    await _repo.SaveAsync(_order);
+    StatusMessage = "Saved!";
+}
+private bool CanSave() => !IsBusy && IsDirty;
+```
+
+### Command Features
+
+- **RelayCommand** - Wraps `Action`/`Func` for sync commands
+- **AsyncRelayCommand** - Wraps async `Task` methods
+- **CanExecute** - Controls button `IsEnabled` binding automatically
+- **CommandParameter** - Passes data from the view to Execute
+- **RaiseCanExecuteChanged** - Refreshes CanExecute evaluation
+- **CommunityToolkit.Mvvm** - `[RelayCommand]` for source-generated commands
+
+<Note>
+Use AsyncRelayCommand for all async operations — it tracks IsRunning, prevents double-execution, and provides cancellation support out of the box.
+</Note>
+
+## Styles & Templates
+
+Styles define reusable property sets; ControlTemplates redefine the complete visual structure of controls.
+
+```xml
+<Style x:Key="PrimaryBtn" TargetType="Button"
+       BasedOn="{StaticResource {x:Type Button}}">
+  <Setter Property="Background" Value="#0070f3"/>
+  <Style.Triggers>
+    <Trigger Property="IsMouseOver" Value="True">
+      <Setter Property="Background" Value="#0050b3"/>
+    </Trigger>
+  </Style.Triggers>
+</Style>
+```
+
+### Style Features
+
+<Tabs>
+  <Tab title="Styles">
+    - **TargetType** - Specifies which control type
+    - **BasedOn** - Inherits from another style (style hierarchy)
+    - **Setters** - Define property values
+    - **Triggers** - Conditional styles based on properties
+  </Tab>
+  <Tab title="Templates">
+    - **ControlTemplate** - Replaces default visual tree
+    - **DataTemplate** - Defines visualization for data objects
+    - **TemplateBinding** - Binds to template parent property
+    - **VisualStateManager** - Handles control state transitions
+  </Tab>
+</Tabs>
+
+<Tip>
+Define an implicit style (without x:Key) for a TargetType to apply it automatically to all controls of that type without explicit reference.
+</Tip>
+
+## Event Handling
+
+WPF uses a routed event system where events bubble up or tunnel down the visual tree. MAUI uses standard CLR events.
+
+```csharp
+private void Grid_PreviewKeyDown(object s, KeyEventArgs e)
+{
+    if (e.Key == Key.Escape)
+    {
+        e.Handled = true;
+        CloseDialog();
+    }
+}
+```
+
+### Routed Events
+
+- **Tunneling (Preview)** - Events fire from root down to element
+- **Bubbling** - Events fire from element up to root
+- **Direct** - No routing
+- **AddHandler** - Registers routed event handlers with `handledEventsToo` option
+- **e.Handled = true** - Stops routing
+- **EventTrigger** - Fires animations on events without code-behind
+
+<Note>
+Use Tunneling (Preview) events for input validation — mark as Handled to prevent bubbling and stop the default behavior before it processes.
+</Note>
+
+## Layouts
+
+WPF panels (Grid, StackPanel, DockPanel, WrapPanel) and MAUI layouts arrange children in the visual tree.
+
+```xml
+<Grid>
+  <Grid.RowDefinitions>
+    <RowDefinition Height="Auto"/>
+    <RowDefinition Height="*"/>
+  </Grid.RowDefinitions>
+  <TextBlock Grid.Row="0" Text="Header"/>
+  <ListBox   Grid.Row="1"/>
+</Grid>
+```
+
+### Panel Types
+
+<CardGroup cols={2}>
+  <Card title="Grid" icon="table-cells">
+    Most flexible 2D layout with row/column definitions using *, Auto, and fixed pixel sizes
+  </Card>
+  <Card title="StackPanel" icon="bars-staggered">
+    Stacks children linearly (horizontal or vertical)
+  </Card>
+  <Card title="DockPanel" icon="window-restore">
+    Docks children to edges (Top, Bottom, Left, Right, Fill)
+  </Card>
+  <Card title="WrapPanel" icon="border-all">
+    Wraps overflowing children to next row/column
+  </Card>
+</CardGroup>
+
+### Advanced Layouts
+
+- **VirtualizingPanel** - Reduces memory for large ItemsControl lists
+- **UniformGrid** - Creates equal-sized cell matrix without markup
+- **Canvas** - Uses absolute X/Y positioning (avoid for responsive UI)
+- **ViewBox** - Scales content to available space without reflow
+- **SharedSizeGroup** - Synchronizes column widths across Grid instances
+
+<Warning>
+Always set VirtualizingPanel.IsVirtualizing="True" on large ItemsControl/ListBox — without it, all items are rendered even if off-screen.
+</Warning>
+
+## MDI Applications
+
+WPF supports MDI-like patterns via DocumentPane, Prism regions, or Avalonia Dock. Managing multiple concurrent documents in a desktop shell.
+
+```csharp
+// Prism region navigation
+_regionManager.
+    RequestNavigate("DocumentRegion",
+        "OrderEditorView",
+        new NavigationParameters
+        {
+            { "orderId", 42 }
+        });
+```
+
+### MDI Patterns
+
+- **AvalonDock** - Provides dockable panel MDI
+- **Prism Regions** - Decouple module UI from shell layout
+- Each document gets its own ViewModel instance
+- Document navigation uses `NavigationService` or Prism `INavigationAware`
+- Shell pattern: main window hosts navigation and document regions
+- Dispose document ViewModels when tabs are closed
+
+<Tip>
+Track open documents in a shared DocumentManager service — this enables "already open?" checks and prevents duplicate documents for the same entity.
+</Tip>
+
+## User Controls
+
+UserControls combine XAML and code-behind into reusable components with dependency properties for parameterization.
+
+```csharp
+public static readonly DependencyProperty LabelProperty =
+    DependencyProperty.Register(nameof(Label), typeof(string),
+        typeof(MyControl), new PropertyMetadata(string.Empty));
+public string Label
+{
+    get => (string)GetValue(LabelProperty);
+    set => SetValue(LabelProperty, value);
+}
+```
+
+### Dependency Properties
+
+- **DependencyProperty** - Registers bindable properties
+- **PropertyChangedCallback** - Reacts to dependency property value changes
+- **Routed events** - Expose custom events that bubble through the tree
+- UserControl sets DataContext internally — do not override externally
+- **TemplatedControl** - Enables full look-and-feel replacement
+
+<Note>
+Prefer TemplatedControl over UserControl when you want the control to be fully re-styleable by consumers — UserControl locks in its visual structure.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="UserControl" icon="cube">
+    Composite UI with fixed visual structure
+  </Card>
+  <Card title="TemplatedControl" icon="wand-magic-sparkles">
+    Lookless control with replaceable template
+  </Card>
+</CardGroup>

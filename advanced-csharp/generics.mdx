@@ -1,0 +1,288 @@
+---
+title: 'Generics & Collections'
+description: 'Master C# generics with constraints, variance, and deep understanding of collection internals including List\<T\>, Dictionary\<K,V\>, and concurrent collections.'
+---
+
+## Overview
+
+Generics in C# provide type-safe, reusable code without boxing overhead. Understanding generic constraints and collection internals is essential for writing high-performance, maintainable code.
+
+## Generic Constraints
+
+Generic constraints restrict which types can be substituted for a type parameter, enabling compile-time type safety and access to constrained members without reflection.
+
+<Note>
+Without constraints, a generic type parameter T only exposes the members of object. Constraints let the compiler guarantee capabilities — enabling member access, operator use, and instantiation.
+</Note>
+
+### Available Constraints
+
+| Constraint | Description | Enables |
+|------------|-------------|----------|
+| `where T : class` | Reference type | Null checks and reference semantics |
+| `where T : struct` | Value type | Prevents null, enables Nullable&lt;T&gt; |
+| `where T : new()` | Has parameterless constructor | `new T()` instantiation |
+| `where T : SomeBase` | Inherits from base class | Access to base class members |
+| `where T : IInterface` | Implements interface | Call interface methods without cast |
+| `where T : unmanaged` | Value type, no managed refs | Unsafe pointer operations, binary serialization |
+| `where T : notnull` | Non-nullable type (C# 8+) | Prevents nullable reference types |
+
+### Constraint Composition
+
+Constraints compose: `where T : class, IComparable\<T\>, new()` means a reference type, comparable, with a default constructor.
+
+```csharp
+// Constraint composition
+public class Repository<TEntity>
+    where TEntity : Entity, IAggregateRoot, new()
+{
+    public TEntity Create() => new TEntity(); // new() enables this
+    public void Save(TEntity e) => e.Validate(); // Entity member
+}
+
+// unmanaged constraint: zero-cost serialization
+public static ReadOnlySpan<byte> AsBytes\<T\>(ref T val)
+    where T : unmanaged
+    => MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref val, 1));
+```
+
+<Tip>
+Use the `unmanaged` constraint for high-performance serialization and binary protocol code — it guarantees the struct can be safely reinterpreted as a byte span without reflection.
+</Tip>
+
+### Key Points
+
+- `where T : class` — reference type; enables null checks and reference semantics
+- `where T : struct` — value type; prevents null, enables Nullable\<T\>
+- `where T : new()` — T has public parameterless constructor; enables new T()
+- `where T : SomeBase` — T is or derives from SomeBase; access base members
+- `where T : IInterface` — T implements interface; call interface methods without cast
+- `where T : unmanaged` — value type with no managed references; enables unsafe pointer ops
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Use `where T : notnull` (C# 8+) to enforce non-nullable type parameters
+    - Combine multiple constraints to narrow the contract precisely
+    - Use interface constraints to call methods on T without boxing or casting
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Over-constrain generic types — it reduces reusability without adding safety
+    - Use object as a constraint alternative — use generics to avoid boxing
+    - Add `new()` constraint unless you actually call `new T()` — it restricts callers unnecessarily
+  </Card>
+</CardGroup>
+
+## Generic Variance
+
+<Tabs>
+  <Tab title="Covariance (out)">
+    **Covariance** allows you to use a more derived type than originally specified.
+    
+    ```csharp
+    // Covariance: return type can be more specific
+    IEnumerable<string> strings = new List<string>();
+    IEnumerable<object> objects = strings; // ✓ string → object
+    
+    // Interface declaration
+    interface IProducer<out T> { T Produce(); }
+    ```
+    
+    Use `out` keyword when the type parameter appears only in output positions (return types).
+  </Tab>
+  <Tab title="Contravariance (in)">
+    **Contravariance** allows you to use a more generic type than originally specified.
+    
+    ```csharp
+    // Contravariance: parameter type can be less specific
+    Action<object> objectAction = obj => Console.WriteLine(obj);
+    Action<string> stringAction = objectAction; // ✓ object → string
+    
+    // Interface declaration
+    interface IConsumer<in T> { void Consume(T item); }
+    ```
+    
+    Use `in` keyword when the type parameter appears only in input positions (parameters).
+  </Tab>
+  <Tab title="Invariance">
+    **Invariance** means no conversion is allowed — the type must match exactly.
+    
+    ```csharp
+    // Invariance: no conversion allowed
+    List<string> strings = new List<string>();
+    List<object> objects = strings; // ✗ Compile error
+    
+    // Generic class without variance
+    class Container\<T\> { public T Value; }
+    ```
+    
+    Most generic classes are invariant because they both produce and consume T.
+  </Tab>
+</Tabs>
+
+## Collection Internals
+
+Understanding collection internal implementations drives correct usage: List\<T\> amortized resizing, Dictionary hash collision handling, and concurrent collection lock strategies.
+
+### List\<T\> Implementation
+
+List\<T\> is a resizable array — O(1) random access, O(1) amortized append (doubles capacity on resize), O(n) insert/remove at index.
+
+```csharp
+// List capacity tuning
+var list = new List<Order>(1000); // preallocate — avoid 10 resizes
+
+// Capacity doubling visualized
+// Initial: 4 → 8 → 16 → 32 → 64 → 128 → 256 → 512 → 1024
+// Each resize copies entire backing array
+```
+
+<Warning>
+Always preallocate List&lt;T&gt; and Dictionary&lt;K,V&gt; with an expected capacity when you know the approximate size — each resize copies the backing array and triggers additional GC pressure.
+</Warning>
+
+### Dictionary\<K,V\> Implementation
+
+Dictionary uses open addressing with prime-sized buckets and double-hashing on collision.
+
+```csharp
+// Dictionary: custom equality for struct keys
+var dict = new Dictionary<Point, Value>(
+    EqualityComparer<Point>.Default); // avoids boxing
+
+// Hash collision handling
+// 1. Compute hash: int hash = key.GetHashCode();
+// 2. Find bucket: int bucket = hash % _buckets.Length;
+// 3. Handle collision: linear probing or chaining
+```
+
+### Collection Performance Characteristics
+
+| Collection | Access | Insert (end) | Insert (middle) | Search | Notes |
+|------------|--------|--------------|-----------------|--------|-------|
+| **List\<T\>** | O(1) | O(1) amortized | O(n) | O(n) | Preallocate capacity |
+| **Dictionary\<K,V\>** | O(1) | O(1) | N/A | O(1) | Hash collisions matter |
+| **LinkedList\<T\>** | O(n) | O(1) | O(1) with node | O(n) | Poor cache locality |
+| **Queue\<T\>** | O(1) front | O(1) | N/A | N/A | Circular buffer |
+| **Stack\<T\>** | O(1) top | O(1) | N/A | N/A | Dynamic array |
+| **HashSet\<T\>** | N/A | O(1) | N/A | O(1) | Unique elements |
+
+### Key Points
+
+- **List\<T\>**: backed by array, doubles when full — preallocate with `List\<T\>(expectedCapacity)`
+- **Dictionary\<K,V\>**: hash(key) % buckets, load factor 0.72, rehashes when exceeded
+- **LinkedList\<T\>**: O(1) insert/remove with node reference, O(n) search — low memory locality
+- **Queue\<T\>**: circular array buffer; Dequeue() from front, Enqueue() to rear
+- **Stack\<T\>**: dynamic array; Push() = Append(), Pop() = RemoveLast()
+- **ConcurrentDictionary**: 16 stripes by default — concurrent reads lock-free, writes stripe-locked
+
+### Concurrent Collections
+
+```csharp
+// ConcurrentDictionary: AddOrUpdate atomically
+var counts = new ConcurrentDictionary<string, int>();
+counts.AddOrUpdate(
+    key: "hits",
+    addValue: 1,
+    updateValueFactory: (_, old) => old + 1);
+
+// ConcurrentQueue: FIFO, lock-free
+var queue = new ConcurrentQueue<Task>();
+queue.Enqueue(task);
+if (queue.TryDequeue(out var nextTask))
+    await nextTask;
+
+// ConcurrentBag: unordered, thread-local optimization
+var bag = new ConcurrentBag<Result>();
+Parallel.ForEach(items, item => bag.Add(Process(item)));
+```
+
+<Tip>
+Use ConcurrentDictionary for multi-reader, multi-writer scenarios — not lock+Dictionary. The fine-grained striped locking provides much better throughput under contention.
+</Tip>
+
+### Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check" color="#15803d">
+    - Preallocate collections with expected capacity to avoid resize copies
+    - Implement GetHashCode() and Equals() on struct keys to avoid boxing
+    - Use ConcurrentDictionary for multi-reader, multi-writer scenarios — not lock+Dictionary
+  </Card>
+  <Card title="Don't" icon="xmark" color="#b91c1c">
+    - Call `List\<T\>.Insert(0, item)` in a hot loop — it is O(n) per insert
+    - Use LinkedList&lt;T&gt; for random access scenarios — cache misses make it slow despite O(1) insert
+    - Use lock + Dictionary when ConcurrentDictionary or ImmutableDictionary fits the pattern
+  </Card>
+</CardGroup>
+
+## Specialized Collections
+
+<Accordion title="When to Use Each Collection Type">
+  ### Choose List\<T\> when:
+  - You need fast random access by index
+  - You're mostly appending to the end
+  - You know the approximate capacity upfront
+  
+  ### Choose Dictionary\<K,V\> when:
+  - You need fast key-based lookup
+  - Keys are unique
+  - You can provide good GetHashCode() implementation
+  
+  ### Choose HashSet\<T\> when:
+  - You need unique elements
+  - You need fast membership testing
+  - Order doesn't matter
+  
+  ### Choose LinkedList\<T\> when:
+  - You have frequent insertions/deletions in the middle
+  - You hold node references
+  - Random access is rare (otherwise use List\<T\>)
+  
+  ### Choose ConcurrentDictionary\<K,V\> when:
+  - Multiple threads read and write
+  - Lock contention would be a problem
+  - You need atomic operations like AddOrUpdate
+  
+  ### Choose ImmutableDictionary\<K,V\> when:
+  - You need snapshot consistency
+  - Writes are rare, reads are common
+  - You're implementing functional patterns
+</Accordion>
+
+## Custom Generic Types
+
+```csharp
+// Generic type with multiple constraints
+public class Cache<TKey, TValue>
+    where TKey : notnull
+    where TValue : class
+{
+    private readonly ConcurrentDictionary<TKey, WeakReference<TValue>> _cache = new();
+    
+    public bool TryGet(TKey key, out TValue? value)
+    {
+        if (_cache.TryGetValue(key, out var weakRef))
+            return weakRef.TryGetTarget(out value);
+        
+        value = null;
+        return false;
+    }
+    
+    public void Set(TKey key, TValue value)
+    {
+        _cache[key] = new WeakReference<TValue>(value);
+    }
+}
+
+// Usage
+var cache = new Cache<string, BigObject>();
+cache.Set("key1", new BigObject());
+if (cache.TryGet("key1", out var obj))
+    Console.WriteLine("Found in cache");
+```
+
+<Note>
+Generic type parameters with constraints enable rich compile-time guarantees while maintaining type safety and performance.
+</Note>

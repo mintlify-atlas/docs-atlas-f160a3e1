@@ -1,0 +1,632 @@
+---
+title: Load Balancing & Traffic Distribution
+description: Load balancing algorithms, DNS routing, CDN strategies, and reverse proxy configuration
+---
+
+## Overview
+
+Load balancers distribute traffic across backend servers using algorithms tuned to request duration, server capacity, and session requirements. **L4 load balancers** operate at the TCP layer (IP and port). **L7 load balancers** operate at the HTTP layer (URL, headers, cookies).
+
+<CardGroup cols={2}>
+  <Card title="L4 Load Balancer" icon="layer-group">
+    **Layer**: TCP/UDP (Transport)
+    
+    **Routing**: Based on IP and port only
+    
+    **Examples**: AWS NLB, HAProxy (TCP mode)
+    
+    **Pros**: Fast, protocol-agnostic, low latency
+    
+    **Cons**: No HTTP-aware routing, no SSL termination
+  </Card>
+  
+  <Card title="L7 Load Balancer" icon="server">
+    **Layer**: HTTP/HTTPS (Application)
+    
+    **Routing**: URL path, headers, cookies
+    
+    **Examples**: AWS ALB, Nginx, Envoy, Traefik
+    
+    **Pros**: Path routing, canary deploys, SSL offload
+    
+    **Cons**: Higher latency, inspects packets
+  </Card>
+</CardGroup>
+
+<Tip>
+Use L7 load balancers for HTTP APIs — path-based routing, SSL termination, and health checks outweigh the minimal latency overhead.
+</Tip>
+
+## Load Balancing Algorithms
+
+<Tabs>
+  <Tab title="Round Robin">
+    Distribute requests equally across all servers:
+    
+    ```text
+    Request 1 → Server A
+    Request 2 → Server B
+    Request 3 → Server C
+    Request 4 → Server A (cycle repeats)
+    ```
+    
+    **Best for**:
+    - Uniform request duration
+    - Homogeneous server capacity
+    - Stateless services
+    
+    **Limitations**:
+    - Ignores server load
+    - Ineffective for long-lived connections (WebSocket)
+    - No awareness of server capacity differences
+    
+    ```nginx
+    # Nginx round robin (default)
+    upstream api {
+      server 10.0.0.1:8080;
+      server 10.0.0.2:8080;
+      server 10.0.0.3:8080;
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Least Connections">
+    Route to server with fewest active connections:
+    
+    ```text
+    Server A: 10 connections
+    Server B: 15 connections
+    Server C: 8 connections
+    
+    → New request routed to Server C
+    ```
+    
+    **Best for**:
+    - Variable request duration
+    - Long-lived connections (WebSocket, gRPC)
+    - Heterogeneous server performance
+    
+    ```nginx
+    # Nginx least connections
+    upstream api {
+      least_conn;
+      server 10.0.0.1:8080;
+      server 10.0.0.2:8080;
+      server 10.0.0.3:8080;
+    }
+    ```
+    
+    <Note>
+    Least Connections is optimal for WebSocket and gRPC where connections are long-lived and request duration varies significantly.
+    </Note>
+  </Tab>
+  
+  <Tab title="Weighted Round Robin">
+    Account for heterogeneous server capacity:
+    
+    ```nginx
+    # Nginx weighted round robin
+    upstream api {
+      server 10.0.0.1:8080 weight=3;  # 75% of traffic
+      server 10.0.0.2:8080 weight=1;  # 25% of traffic
+    }
+    ```
+    
+    **Distribution**:
+    ```text
+    Request 1 → Server A (weight 3)
+    Request 2 → Server A
+    Request 3 → Server A
+    Request 4 → Server B (weight 1)
+    Request 5 → Server A (cycle repeats)
+    ```
+    
+    **Use cases**:
+    - Gradual canary deployments (weight=1 for new version)
+    - Mixed instance sizes (r5.large vs r5.2xlarge)
+    - Blue-green testing (weight=10 blue, weight=1 green)
+  </Tab>
+  
+  <Tab title="IP Hash (Sticky Sessions)">
+    Route same client to same server using IP hash:
+    
+    ```nginx
+    # Nginx IP hash
+    upstream api {
+      ip_hash;
+      server 10.0.0.1:8080;
+      server 10.0.0.2:8080;
+      server 10.0.0.3:8080;
+    }
+    ```
+    
+    ```text
+    hash(client_ip) % server_count = server_index
+    
+    Client 1.2.3.4   → hash → Server B (always)
+    Client 5.6.7.8   → hash → Server A (always)
+    ```
+    
+    **Pros**:
+    - Session affinity without shared state
+    - Useful for stateful apps
+    
+    **Cons**:
+    - Uneven distribution with NAT (many users share one IP)
+    - Removing server remaps many clients
+    - Not recommended for modern stateless architectures
+    
+    <Warning>
+    IP hashing is problematic with NAT and mobile networks where many users share a single IP. Use cookie-based sticky sessions or eliminate state instead.
+    </Warning>
+  </Tab>
+  
+  <Tab title="Consistent Hashing">
+    Minimal cache remapping when nodes are added or removed:
+    
+    ```text
+    // Traditional modulo hash
+    server = hash(key) % N
+    // Adding 1 node: ~75% of keys remap (cache storm!)
+    
+    // Consistent hashing (hash ring)
+    // Adding 1 node: only ~1/N of keys remap
+    ```
+    
+    ```javascript
+    // Consistent hash ring with virtual nodes
+    const ring = new ConsistentHash();
+    ring.addNode('server-a', 150);  // 150 virtual nodes
+    ring.addNode('server-b', 150);
+    ring.addNode('server-c', 150);
+    
+    const server = ring.getNode('user:1001');
+    // → 'server-b'
+    
+    // Add server-d: only ~25% of keys remap
+    ring.addNode('server-d', 150);
+    ```
+    
+    **Best for**:
+    - Cache tier load balancing
+    - Distributed caching (Memcached, Redis Cluster)
+    - Minimizing disruption during autoscaling
+  </Tab>
+  
+  <Tab title="Power of Two Choices (P2C)">
+    Pick 2 random servers, route to less loaded one:
+    
+    ```javascript
+    function p2c(servers) {
+      // 1. Pick 2 random servers
+      const a = servers[Math.floor(Math.random() * servers.length)];
+      const b = servers[Math.floor(Math.random() * servers.length)];
+      
+      // 2. Route to one with fewer active connections
+      return a.connections < b.connections ? a : b;
+    }
+    ```
+    
+    **Performance**: Near-optimal load distribution with minimal overhead
+    
+    **Benefits**:
+    - Simple implementation
+    - No global state required
+    - Scales to thousands of servers
+    
+    <Tip>
+    P2C (Power of Two Choices) provides 90% of the benefit of "true" least connections with 10% of the complexity. Excellent default for internal microservices.
+    </Tip>
+  </Tab>
+</Tabs>
+
+## Health Checks
+
+Load balancers must detect and remove unhealthy backends:
+
+### Active Health Checks
+
+```nginx
+# Nginx health check configuration
+upstream api {
+  server 10.0.0.1:8080;
+  server 10.0.0.2:8080;
+  server 10.0.0.3:8080;
+  
+  # Health check
+  check interval=3000 rise=2 fall=3 timeout=1000 type=http;
+  check_http_send "GET /health HTTP/1.1\r\nHost: api\r\n\r\n";
+  check_http_expect_alive http_2xx http_3xx;
+}
+```
+
+**Parameters**:
+- `interval`: check every 3 seconds
+- `rise`: 2 consecutive successes → mark healthy
+- `fall`: 3 consecutive failures → mark unhealthy
+- `timeout`: fail check if no response in 1 second
+
+### Health Endpoint Design
+
+```javascript
+// Good health endpoint
+app.get('/health', async (req, res) => {
+  // Check critical dependencies
+  const checks = await Promise.all([
+    checkDatabase(),
+    checkRedis(),
+    checkDownstreamAPI()
+  ]);
+  
+  const healthy = checks.every(c => c.ok);
+  
+  if (healthy) {
+    return res.status(200).json({ status: 'healthy', checks });
+  } else {
+    return res.status(503).json({ status: 'unhealthy', checks });
+  }
+});
+
+async function checkDatabase() {
+  try {
+    await db.query('SELECT 1');
+    return { name: 'database', ok: true };
+  } catch (err) {
+    return { name: 'database', ok: false, error: err.message };
+  }
+}
+```
+
+<Warning>
+Health checks should be fast (under 100ms) and lightweight. Avoid complex business logic or expensive queries in health endpoints.
+</Warning>
+
+### Kubernetes Probes
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-server
+spec:
+  containers:
+  - name: api
+    image: api:v1.2.3
+    ports:
+    - containerPort: 8080
+    
+    # Liveness: restart if unhealthy
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8080
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    
+    # Readiness: remove from service if not ready
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 2
+```
+
+**Liveness vs Readiness**:
+- **Liveness**: Is the process alive? (Restart if fails)
+- **Readiness**: Can it serve traffic? (Remove from load balancer if fails)
+
+<Note>
+Use separate `/health` (liveness) and `/ready` (readiness) endpoints. Readiness should check dependencies; liveness should only verify the process is responsive.
+</Note>
+
+## Connection Draining
+
+Gracefully remove servers from rotation:
+
+```nginx
+# Nginx connection draining
+upstream api {
+  server 10.0.0.1:8080;
+  server 10.0.0.2:8080 down;  # stop sending new connections
+  server 10.0.0.3:8080;
+}
+```
+
+**Process**:
+1. Mark server as draining (no new connections)
+2. Wait for existing connections to complete
+3. Forcefully close connections after timeout (e.g., 30s)
+4. Remove server from pool
+
+```javascript
+// Graceful shutdown in Node.js
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received: starting graceful shutdown');
+  
+  // 1. Stop accepting new connections
+  server.close(() => {
+    console.log('HTTP server closed');
+  });
+  
+  // 2. Wait for active requests to complete (max 30s)
+  setTimeout(() => {
+    console.log('Forcefully shutting down');
+    process.exit(1);
+  }, 30000);
+});
+```
+
+<Tip>
+Always enable connection draining with a 30-60 second timeout. This prevents abrupt connection termination during deployments and autoscaling events.
+</Tip>
+
+## DNS Load Balancing
+
+### DNS Round Robin
+
+```text
+# DNS A records (multiple IPs)
+api.example.com.  60  IN  A  1.2.3.4
+api.example.com.  60  IN  A  5.6.7.8
+api.example.com.  60  IN  A  9.10.11.12
+
+// Client resolves and caches one IP based on DNS response order
+```
+
+**Limitations**:
+- No health awareness (DNS doesn't know if server is down)
+- No session affinity
+- TTL prevents fast failover
+- Client caching behavior varies
+
+<Warning>
+DNS round robin is not a production load balancing solution. Use dedicated load balancers (ALB, NLB) with health checks instead.
+</Warning>
+
+### GeoDNS (Latency-Based Routing)
+
+Route clients to nearest data center:
+
+```text
+// Route 53 latency routing
+api.example.com (latency-based):
+  us-east-1: 1.2.3.4    (for US/Canada clients)
+  eu-west-1: 5.6.7.8    (for Europe clients)
+  ap-south-1: 9.10.11.12 (for Asia clients)
+```
+
+**Benefits**:
+- Reduced cross-region latency
+- Automatic failover to next-closest region
+- Global load distribution
+
+### DNS Failover
+
+```yaml
+# Route 53 health check + failover
+Primary:
+  type: A
+  value: 1.2.3.4
+  health_check: GET https://1.2.3.4/health (every 30s)
+  failover: PRIMARY
+
+Secondary:
+  type: A
+  value: 5.6.7.8
+  failover: SECONDARY
+  
+# If primary health check fails → automatically route to secondary
+```
+
+<Tip>
+Lower TTL to 60 seconds at least 24 hours before any planned migration or failover. This limits client cache staleness without overwhelming DNS servers.
+</Tip>
+
+## Content Delivery Networks (CDN)
+
+CDNs cache content at geographically distributed PoPs (Points of Presence), serving users from the nearest edge node.
+
+### Pull CDN
+
+CDN populates cache on first request (lazy loading):
+
+```text
+// First request (cache miss)
+User (Tokyo) → CDN PoP (Tokyo) → Origin (us-east-1)
+              ← caches response  ←
+              
+// Subsequent requests (cache hit)
+User (Tokyo) → CDN PoP (Tokyo)  [cached, no origin request]
+```
+
+**Examples**: Cloudflare, CloudFront, Fastly
+
+**Best for**: Unpredictable traffic, many assets
+
+### Push CDN
+
+Proactively publish content to CDN:
+
+```bash
+# Upload large file to CDN
+aws cloudfront create-invalidation \
+  --distribution-id E1234567890ABC \
+  --paths "/videos/large-file.mp4"
+```
+
+**Examples**: Akamai, custom CDN
+
+**Best for**: Large media files, predictable access patterns
+
+### Cache Control Headers
+
+```http
+HTTP/1.1 200 OK
+Cache-Control: public, s-maxage=86400, max-age=3600
+Vary: Accept-Encoding
+ETag: "33a64df551425fcc55e4d42a148795d9f25f89d4"
+```
+
+```text
+// Layered caching
+Cache-Control: public, s-maxage=86400, max-age=3600
+// CDN caches 24h (s-maxage)
+// Browser caches 1h (max-age)
+
+// User-specific content
+Cache-Control: private, no-store
+// CDN must NOT cache
+
+// Immutable assets (versioned URLs)
+Cache-Control: public, max-age=31536000, immutable
+```
+
+<Tip>
+Use versioned filenames (`app.v2.min.js`) with 1-year TTLs for static assets. "Invalidate" by deploying new filenames instead of waiting for CDN TTL expiry.
+</Tip>
+
+### CDN Invalidation
+
+```bash
+# Cloudflare purge (instant, best-effort)
+curl -X POST "https://api.cloudflare.com/client/v4/zones/{zone_id}/purge_cache" \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  --data '{"files":["/css/main.css","/js/app.js"]}'
+
+# CloudFront invalidation (takes 5-15 minutes)
+aws cloudfront create-invalidation \
+  --distribution-id E1234567890ABC \
+  --paths "/css/*" "/js/*"
+```
+
+<Warning>
+CDN invalidation is best-effort and can take minutes to propagate. Use versioned URLs instead of relying on invalidation for time-sensitive updates.
+</Warning>
+
+## Reverse Proxy Caching
+
+### Varnish Full-Page Cache
+
+```vcl
+# Varnish configuration (VCL)
+vcl 4.1;
+
+backend default {
+  .host = "app-server";
+  .port = "8080";
+}
+
+sub vcl_recv {
+  # Normalize Accept-Encoding
+  if (req.http.Accept-Encoding) {
+    if (req.http.Accept-Encoding ~ "gzip") {
+      set req.http.Accept-Encoding = "gzip";
+    } else if (req.http.Accept-Encoding ~ "deflate") {
+      set req.http.Accept-Encoding = "deflate";
+    } else {
+      unset req.http.Accept-Encoding;
+    }
+  }
+  
+  # Don't cache authenticated requests
+  if (req.http.Authorization || req.http.Cookie ~ "session=") {
+    return (pass);
+  }
+  
+  # Only cache GET and HEAD
+  if (req.method != "GET" && req.method != "HEAD") {
+    return (pass);
+  }
+}
+
+sub vcl_backend_response {
+  # Cache for 1 hour if origin doesn't specify
+  if (!beresp.http.Cache-Control) {
+    set beresp.ttl = 1h;
+  }
+  
+  # Grace period: serve stale for 10 min if backend is down
+  set beresp.grace = 10m;
+}
+```
+
+### Nginx Caching
+
+```nginx
+# Nginx cache configuration
+proxy_cache_path /var/cache/nginx 
+  levels=1:2 
+  keys_zone=api_cache:10m 
+  max_size=1g 
+  inactive=60m;
+
+server {
+  listen 80;
+  server_name api.example.com;
+  
+  location /api/ {
+    proxy_pass http://app-servers;
+    
+    # Enable caching
+    proxy_cache api_cache;
+    proxy_cache_valid 200 10m;
+    proxy_cache_valid 404 1m;
+    
+    # Cache key
+    proxy_cache_key "$scheme$request_method$host$request_uri";
+    
+    # Headers
+    add_header X-Cache-Status $upstream_cache_status;
+  }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Do: Use Least Connections for WebSocket/gRPC">
+    Long-lived connections require connection-aware routing. Round robin will eventually create imbalance.
+  </Accordion>
+  
+  <Accordion title="Do: Enable connection draining before removing servers">
+    Set timeout to 30-60 seconds to allow in-flight requests to complete gracefully during deployments.
+  </Accordion>
+  
+  <Accordion title="Do: Use consistent hashing for cache tier load balancing">
+    Minimizes cache miss storms when nodes are added or removed during autoscaling events.
+  </Accordion>
+  
+  <Accordion title="Don't: Use IP hash with NAT or mobile clients">
+    Many users behind NAT share one IP, creating severe imbalance. Use cookie-based sticky sessions or eliminate state.
+  </Accordion>
+  
+  <Accordion title="Don't: Rely on DNS round robin for production load balancing">
+    No health awareness, slow failover due to TTL. Use L7 load balancer with active health checks instead.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Availability Patterns" icon="shield-check" href="/system-design/availability-patterns">
+    Active-active and active-passive failover strategies
+  </Card>
+  
+  <Card title="Scalability" icon="chart-line" href="/system-design/scalability">
+    Horizontal scaling and autoscaling patterns
+  </Card>
+  
+  <Card title="Caching" icon="bolt" href="/system-design/caching">
+    Multi-layer caching strategies and invalidation
+  </Card>
+  
+  <Card title="Databases" icon="database" href="/system-design/databases">
+    Database connection pooling and read replica routing
+  </Card>
+</CardGroup>

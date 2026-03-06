@@ -1,0 +1,199 @@
+---
+title: Common Language Runtime (CLR)
+description: Understanding the .NET Framework CLR - JIT compilation, garbage collection, type safety, and runtime services
+---
+
+The Common Language Runtime (CLR) is the execution engine of the .NET Framework. It provides essential services like memory management, type safety, exception handling, thread management, and security enforcement.
+
+## JIT Compilation
+
+The Just-In-Time compiler translates Microsoft Intermediate Language (MSIL) into native machine code at runtime, enabling platform optimization while keeping code portable across CLR targets.
+
+```csharp
+// dotnet publish --runtime win-x64 -p:PublishReadyToRun=true
+var options = new JitOptions { TieredCompilation = true };
+// Profile shows method promoted to Tier1 after 30 calls
+```
+
+### How JIT Works
+
+- **MSIL is CPU-agnostic** - JIT produces native code per platform
+- **First call overhead** - Compilation occurs on first method invocation; subsequent calls use cached native code
+- **ReadyToRun (R2R)** - Pre-compiles assemblies to reduce startup latency
+- **Tiered compilation** - Promotes hot methods to higher optimization tiers
+- **Profile-guided optimization** - Inlines and unrolls frequently executed paths
+- **NativeAOT** - Skips JIT entirely, compiling ahead of time
+
+<Tip>
+Use ReadyToRun publishing for services where startup latency matters; profile with dotnet-trace to see JIT overhead.
+</Tip>
+
+<Warning>
+Don't assume JIT is always slower than AOT — benchmarks vary by workload.
+</Warning>
+
+## Garbage Collection
+
+The CLR GC automatically reclaims unreachable heap objects. Understanding generations prevents allocation pressure and GC pauses.
+
+### Generational Model
+
+The .NET GC uses a three-generation model:
+
+- **Gen0** - Collects frequently and cheaply (~100x more than Gen2)
+- **Gen1** - Intermediate generation
+- **Gen2** - Collects long-lived objects infrequently
+- **Large Object Heap (LOH)** - Stores objects ≥85KB, not compacted by default
+
+```csharp
+var pool = ArrayPool<byte>.Shared;
+byte[] buffer = pool.Rent(1024);
+try { /* use buffer */ }
+finally { pool.Return(buffer); }
+```
+
+### Key Points
+
+- LOH is not compacted by default — use `GCSettings.LargeObjectHeapCompactionMode`
+- **Server GC vs Workstation GC** - Trade throughput for latency
+- Finalization queues objects for an extra GC cycle — avoid finalizers
+- Use `ArrayPool<T>` and `MemoryPool<T>` to reduce Gen0 pressure
+- `GC.Collect()` is rarely correct in production code
+
+<Note>
+Monitor GC generation counts with EventCounters in production; spikes in Gen2 collections indicate long-lived allocation leaks.
+</Note>
+
+## Type Safety
+
+The CLR enforces that operations are valid for their operands' types, preventing buffer overruns, invalid casts, and memory corruption.
+
+```csharp
+object obj = 42;              // boxing
+if (obj is int value)         // pattern match, no box
+    Console.WriteLine(value);
+string? s = obj as string;    // null if not string
+```
+
+### Type System Features
+
+- **Value types** - Stored on stack; reference types on heap (by default)
+- **Boxing** - Wraps value types in reference type heap objects — avoid in hot paths
+- **Unsafe code** - Bypasses type safety with explicit opt-in
+- **Nullable reference types** - C# 8+ adds compile-time null analysis
+- **Generic constraints** - Enforce type relationships at compile time
+- **Pattern matching** - Concise, safe type discrimination
+
+<Tip>
+Enable `<Nullable>enable</Nullable>` in your csproj — fixing warnings eliminates an entire class of NullReferenceException in production.
+</Tip>
+
+## Exception Handling
+
+CLR exceptions provide a unified mechanism for error signalling across language boundaries. Proper handling prevents silent failures and data corruption.
+
+```csharp
+try
+{
+    await DoWorkAsync();
+}
+catch (HttpRequestException ex)
+    when (ex.StatusCode == HttpStatusCode.NotFound)
+{
+    _logger.LogWarning("Resource not found");
+}
+```
+
+### Exception Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Do" icon="check">
+    - Catch specific exception types
+    - Include contextual info in custom exception messages
+    - Register unobserved task exception handlers in apps
+  </Card>
+  <Card title="Don't" icon="xmark">
+    - Swallow exceptions silently
+    - Use exceptions for normal control flow
+    - Re-throw with `throw ex` (loses stack trace)
+  </Card>
+</CardGroup>
+
+### Key Concepts
+
+- All CLR exceptions derive from `System.Exception`
+- `ExceptionDispatchInfo` preserves stack traces when re-throwing async exceptions
+- `AggregateException` wraps multiple async task faults
+- Filter clauses (`when`) allow catching only specific error conditions
+- Global handlers: `AppDomain.UnhandledException`, `TaskScheduler.UnobservedTaskException`
+
+<Note>
+Use exception filters (`when`) to log exceptions without catching them — you get diagnostics without altering control flow.
+</Note>
+
+## Thread Management
+
+The CLR thread pool and synchronization primitives enable concurrent execution while protecting shared state.
+
+```csharp
+private static SemaphoreSlim _sem = new(3);
+await _sem.WaitAsync(cancellationToken);
+try { await ProcessAsync(); }
+finally { _sem.Release(); }
+```
+
+### Threading Primitives
+
+- **ThreadPool** - Manages a pool of worker threads
+- **ThreadLocal&lt;T&gt;** - Provides per-thread storage
+- **Monitor** - Used by `lock` keyword under the hood
+- **SemaphoreSlim** - Async-compatible semaphore
+- **Interlocked** - Lock-free atomic operations
+- **CancellationToken** - Cooperative cancellation of long tasks
+
+<Warning>
+Use SemaphoreSlim instead of lock for async code — lock cannot be awaited and will deadlock in async contexts.
+</Warning>
+
+### Important Guidelines
+
+- `Thread.Sleep` blocks a thread; prefer `Task.Delay` for async waits
+- `ThreadPool.QueueUserWorkItem` is low-level; prefer `Task.Run`
+- SemaphoreSlim is async-compatible; Semaphore is not
+- Monitor.Enter/Exit used by lock keyword under the hood
+- Interlocked operations provide lock-free atomic updates
+
+## Security & Enforcement
+
+The CLR enforces security permissions, assembly trust levels, and identity-based access control.
+
+```csharp
+var protector = _provider.CreateProtector("MyPurpose");
+string ciphertext = protector.Protect("sensitive");
+string plaintext  = protector.Unprotect(ciphertext);
+```
+
+### Security Features
+
+- **Strong naming** - Ensures assembly identity and prevents tampering
+- **Data Protection API (DPAPI)** - Replaces manual encryption for config secrets
+- **SecureString** - Holds sensitive data in encrypted memory
+- **Principal and Identity** - Underpin role-based access
+- **Span&lt;T&gt; and Memory&lt;T&gt;** - Reduce attack surface by avoiding intermediate copies
+- **NuGet package auditing** - Catches known vulnerable dependencies
+
+<Tip>
+Use the ASP.NET Core Data Protection API instead of rolling your own AES encryption — it handles key rotation automatically.
+</Tip>
+
+<CardGroup cols={3}>
+  <Card title="Use Data Protection API" icon="shield">
+    For secrets at rest
+  </Card>
+  <Card title="Enable NuGet Auditing" icon="scan">
+    In CI pipelines
+  </Card>
+  <Card title="Apply Least Privilege" icon="lock">
+    To service accounts
+  </Card>
+</CardGroup>
